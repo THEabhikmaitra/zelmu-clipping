@@ -39,13 +39,16 @@ def query_ollama_json(prompt: str, retries: int = 2, timeout: int = 300) -> Opti
     return None
 
 def split_transcript_into_chunks(
-    transcript: Dict[str, Any],
+    transcript: Optional[Dict[str, Any]],
     chunk_duration_sec: float = 480.0,
     overlap_sec: float = 30.0
 ) -> List[List[Dict[str, Any]]]:
     """
     Splits transcript segments into 8-minute chunks with a 30-second overlap.
     """
+    if not transcript or not isinstance(transcript, dict):
+        return []
+
     segments = transcript.get("segments", [])
     if not segments:
         return []
@@ -271,7 +274,7 @@ def calculate_audio_spikes(
     return spikes
 
 def extract_candidates_full(
-    transcript: Dict[str, Any],
+    transcript: Optional[Dict[str, Any]],
     mode: str = "Mode A",
     channel_name: str = "Creator",
     audio_path: Optional[Path] = None
@@ -280,6 +283,9 @@ def extract_candidates_full(
     Main entry point for candidate analysis across chunks.
     Blends Ollama LLM semantic scoring with NeonClipping acoustic energy spikes.
     """
+    if not transcript or not isinstance(transcript, dict):
+        transcript = {"segments": [], "duration": 0.0}
+
     if mode == "Mode B":
         return analyze_mode_b_compilation(transcript, channel_name)
 
