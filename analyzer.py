@@ -291,11 +291,12 @@ def extract_candidates_full(
     transcript: Optional[Dict[str, Any]],
     mode: str = "Mode A",
     channel_name: str = "Creator",
-    audio_path: Optional[Path] = None
+    audio_path: Optional[Path] = None,
+    target_clips: int = 4
 ) -> Dict[str, Any]:
     """
     Main entry point for candidate analysis across chunks.
-    Prioritizes ultra-fast acoustic energy spikes (0.05s) + micro-title prompts (0.3s).
+    Prioritizes ultra-fast acoustic energy spikes (0.05s) + unique clip titles.
     """
     if not transcript or not isinstance(transcript, dict):
         transcript = {"segments": [], "duration": 0.0}
@@ -314,9 +315,19 @@ def extract_candidates_full(
     all_candidates = []
     segments = transcript.get("segments", [])
 
+    VIRAL_THEMES = [
+        "Insane Police Escape", "Crazy Stunt Jump", "Impossible Clutch Play",
+        "Unbelievable Physics Glitch", "Total Chaos in Vice City", "High Speed Highway Chase",
+        "Insane Gunfight Survival", "Speedrun Moment", "Hilarious Fail Reaction",
+        "Max Wanted Level Madness"
+    ]
+
     # Fast Path: Acoustic Peak Priority (0.05s instant highlight detection)
     if spikes:
-        for spk in spikes[:3]:
+        sorted_spikes = sorted(spikes, key=lambda s: s.get("score", 0), reverse=True)
+        selected_spikes = sorted_spikes[:max(1, target_clips)]
+
+        for idx, spk in enumerate(selected_spikes):
             peak_t = spk["time"]
             win_start = max(0.0, peak_t - 12.0)
             win_end = win_start + 32.0
@@ -326,24 +337,23 @@ def extract_candidates_full(
                 start_exact = covering_segs[0]["start"]
                 end_exact = min(covering_segs[-1]["end"], start_exact + 40.0)
                 words_count = sum(len(s.get("words", [])) for s in covering_segs)
-                clip_text = " ".join([s["text"] for s in covering_segs])
             else:
                 start_exact = win_start
                 end_exact = win_end
                 words_count = 50
-                clip_text = "Insane GTA 6 High Energy Moment"
 
             dur = round(end_exact - start_exact, 2)
             if 24.0 <= dur <= 44.0:
-                fast_title = generate_micro_title(clip_text, f"Insane GTA 6 Moment @ {int(peak_t)}s")
+                theme_title = VIRAL_THEMES[idx % len(VIRAL_THEMES)]
+                title = f"{theme_title} @ {int(start_exact)}s"
                 all_candidates.append({
                     "start": round(start_exact, 2),
                     "end": round(end_exact, 2),
                     "duration": dur,
                     "spoken_word_count": words_count,
-                    "viral_hook": f"Acoustic Peak (Score {int(spk['score']*100)}%)",
-                    "title": fast_title,
-                    "safe_title": sanitize_filename(fast_title),
+                    "viral_hook": f"Acoustic Peak #{idx+1} (Score {int(spk['score']*100)}%)",
+                    "title": title,
+                    "safe_title": sanitize_filename(f"GTA6_{theme_title.replace(' ', '_')}_{idx+1}_{int(start_exact)}s"),
                     "reason": f"Acoustic spike: loudness={spk['loud']}, shout={spk['shout']}"
                 })
 
@@ -352,8 +362,10 @@ def extract_candidates_full(
         chunks = split_transcript_into_chunks(transcript, chunk_duration_sec=480.0, overlap_sec=30.0)
         for i, chunk in enumerate(chunks):
             cands = analyze_mode_a_chunk(chunk)
-            all_candidates.extend(cands)
-            if len(all_candidates) >= 3:
+            for cand_idx, cand in enumerate(cands):
+                cand["safe_title"] = sanitize_filename(f"{cand.get('safe_title', 'GTA6_Moment')}_{len(all_candidates)+1}_{int(cand['start'])}s")
+                all_candidates.append(cand)
+            if len(all_candidates) >= target_clips:
                 break
 
     # 4. Ultimate fallback to word-dense window

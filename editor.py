@@ -315,10 +315,10 @@ def render_mode_a_short(
 
     if tracking_keys:
         from tracker import generate_panning_crop_expr
-        crop_x = generate_panning_crop_expr(tracking_keys, out_w=1080)
+        crop_x = generate_panning_crop_expr(tracking_keys)
         base_filter = (
-            f"[0:v]scale=-2:1920,"
-            f"crop=1080:1920:'{crop_x}':0,"
+            f"[0:v]crop=in_h*9/16:in_h:'{crop_x}':0,"
+            f"scale=1080:1920,"
             f"subtitles='{esc_sub}'"
         )
     elif not split_layout:

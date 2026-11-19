@@ -694,6 +694,14 @@ with tab1:
         else:
             channel_credit = st.text_input("Credit", placeholder="@handle (auto-detected if blank)", label_visibility="collapsed")
 
+        target_reels_count = st.slider(
+            "Shorts to Extract per Video",
+            min_value=2,
+            max_value=12,
+            value=4,
+            help="Choose how many viral Reels/Shorts to extract from each video"
+        )
+
         scan_window = st.selectbox(
             "Duration Cap",
             [
@@ -894,11 +902,12 @@ with tab1:
                             transcript,
                             mode=target_mode,
                             channel_name=active_credit,
-                            audio_path=audio_wav if audio_wav.exists() else None
+                            audio_path=audio_wav if audio_wav.exists() else None,
+                            target_clips=target_reels_count
                         )
                         with open(candidates_json, "w", encoding="utf-8") as f:
                             json.dump(analysis, f, indent=2)
-                        push_log("AI analysis complete. Selected candidate clips.")
+                        push_log(f"AI analysis complete. Selected {len(analysis.get('candidates', []))} candidate clips.")
                     else:
                         push_log("Reusing cached 03_candidates.json")
                         with open(candidates_json, "r", encoding="utf-8") as f:
@@ -916,7 +925,8 @@ with tab1:
                             start_t = cand["start"]
                             end_t = cand["end"]
                             safe_title = cand.get("safe_title", f"GTA6_Moment_{c_idx+1}")
-                            final_dest = READY_DIR / f"{safe_title}.mp4"
+                            dest_stem = f"{safe_title}_{c_idx+1}_{int(start_t)}s" if not safe_title.endswith(f"_{int(start_t)}s") else safe_title
+                            final_dest = READY_DIR / f"{dest_stem}.mp4"
 
                             if final_dest.exists() and final_dest.stat().st_size > 102400:
                                 push_log(f"Short '{safe_title}' already exists.")

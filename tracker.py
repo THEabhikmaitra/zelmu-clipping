@@ -125,25 +125,23 @@ def track_player(video_path: str, fps: float = 0.5) -> Optional[List[Tuple[float
         return None
 
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    every = max(1, round(src_fps / fps))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / src_fps if total_frames > 0 else 30.0
     times, xs, prev = [], [], None
-    frame_idx = 0
 
+    # Sample video at 0.5 fps via direct timestamp seeking (takes 0.2s total)
+    sample_times = [t for t in np.arange(0.0, max(1.0, duration), 1.0 / max(0.1, fps))]
     try:
-        while True:
-            ok = cap.grab()
-            if not ok:
-                break
-            if frame_idx % every == 0:
-                ok, frame = cap.retrieve()
-                if not ok or frame is None:
-                    break
-                x = pick_player(detect_people(frame), fw, fh, prev)
-                if x is not None:
-                    prev = x
-                times.append(frame_idx / src_fps)
-                xs.append(x)
-            frame_idx += 1
+        for t in sample_times:
+            cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000.0)
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                continue
+            x = pick_player(detect_people(frame), fw, fh, prev)
+            if x is not None:
+                prev = x
+            times.append(t)
+            xs.append(x)
     finally:
         cap.release()
 
@@ -155,16 +153,16 @@ def track_player(video_path: str, fps: float = 0.5) -> Optional[List[Tuple[float
     return list(zip(times, smoothed))
 
 
-def generate_panning_crop_expr(keys: List[Tuple[float, float]], out_w: int = 1080) -> str:
+def generate_panning_crop_expr(keys: List[Tuple[float, float]]) -> str:
     """
-    Builds piecewise-linear FFmpeg expression for crop x coordinate.
-    Input stream is expected to be scaled to 1920 height.
+    Builds piecewise-linear FFmpeg expression for native crop x coordinate.
+    Crops in native resolution before scaling for maximum encoding speed.
     """
     if not keys:
-        return f"(in_w-{out_w})/2"
+        return "(in_w-in_h*9/16)/2"
 
     def at_x(x_val: float) -> str:
-        return f"(in_w*{x_val:.4f}-{out_w // 2})"
+        return f"(in_w*{x_val:.4f}-in_h*9/32)"
 
     expr = at_x(keys[-1][1])
     for (t0, x0), (t1, x1) in reversed(list(zip(keys, keys[1:]))):
@@ -173,7 +171,7 @@ def generate_panning_crop_expr(keys: List[Tuple[float, float]], out_w: int = 108
         seg = f"({at_x(x0)}+({at_x(x1)}-{at_x(x0)})*(t-{t0:.2f})/{t1 - t0:.2f})"
         expr = f"if(lt(t\\,{t1:.2f})\\,{seg}\\,{expr})"
 
-    return f"max(0\\,min(in_w-{out_w}\\,{expr}))"
+    return f"max(0\\,min(in_w-in_h*9/16\\,{expr}))"
 
 
 def detect_facecam(video_path: str, sample_count: int = 10) -> Optional[Dict[str, Any]]:
