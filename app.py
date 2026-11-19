@@ -18,6 +18,7 @@ for _p in [_base_dir / "bin", _base_dir / "venv" / "Scripts"]:
         os.environ["PATH"] = str(_p) + os.pathsep + os.environ.get("PATH", "")
 
 import streamlit as st
+from streamlit.runtime.scriptrunner import StopException, RerunException
 
 def format_elapsed(seconds: float) -> str:
     """Formats seconds into HH:MM:SS."""
@@ -754,7 +755,10 @@ with tab1:
                 msg_clean = re.sub(r"\s+", " ", msg.strip())
                 with log_lock:
                     full_logs.append(f"[{ts}] {msg_clean}")
-                    detail_box.code("\n".join(full_logs), language="bash")
+                    try:
+                        detail_box.code("\n".join(full_logs), language="bash")
+                    except Exception:
+                        pass
 
             for url_idx, raw_url in enumerate(urls):
                 t_start = time.time()
@@ -1041,6 +1045,8 @@ with tab1:
                             push_log(f"Rendered: {final_dest.name}")
                         else:
                             push_log(f"Transformative Short '{comp_title}' already exists.")
+                except (StopException, RerunException):
+                    raise
                 except ConnectionError as ce:
                     st.session_state["pipeline_paused"] = True
                     push_log(f"⚠️ PAUSED: Internet connection dropped ({ce}). Checkpoints safe.")

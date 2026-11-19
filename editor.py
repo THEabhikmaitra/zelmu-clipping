@@ -186,7 +186,6 @@ def download_video_section(
         *get_ytdlp_cmd(),
         "--newline",
         "--download-sections", section_arg,
-        "--force-keyframes-at-cuts",
         "--concurrent-fragments", "4",
         "--buffer-size", "16M",
         "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best",

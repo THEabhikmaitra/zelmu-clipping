@@ -28,7 +28,7 @@ def get_ytdlp_cmd() -> List[str]:
 
     # Accelerate cipher extraction with local Node.js if present
     if shutil.which("node"):
-        base_cmd.extend(["--js-runtimes", "node"])
+        base_cmd.extend(["--js-runtimes", "node", "--remote-components", "ejs:github"])
     return base_cmd
 
 def get_ffmpeg_path() -> Optional[Path]:
