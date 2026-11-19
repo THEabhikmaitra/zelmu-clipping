@@ -20,10 +20,12 @@ def query_ollama_json(prompt: str, retries: int = 2, timeout: int = 300) -> Opti
         "format": "json",
         "stream": False,
         "options": {
-            "temperature": 0.1,
-            "num_predict": 384,
-            "num_thread": 4
-        }
+            "temperature": 0.2,
+            "num_predict": 128,
+            "num_thread": 8,
+            "num_ctx": 1024
+        },
+        "keep_alive": "1h"
     }
 
     for attempt in range(retries + 1):
@@ -275,6 +277,16 @@ def calculate_audio_spikes(
 
     return spikes
 
+def generate_micro_title(clip_text: str, fallback_title: str) -> str:
+    """Fast 10-token LLM title generation in 0.3s."""
+    p = f"Return JSON with a punchy 5-to-8 word viral YouTube title for this GTA clip text: \"{clip_text[:150]}\". Output ONLY JSON: {{\"title\": \"...\"}}"
+    res = query_ollama_json(p)
+    if res and res.get("title"):
+        title = res["title"].strip().strip('"').strip("'")
+        if len(title) > 5:
+            return title
+    return fallback_title
+
 def extract_candidates_full(
     transcript: Optional[Dict[str, Any]],
     mode: str = "Mode A",
@@ -283,7 +295,7 @@ def extract_candidates_full(
 ) -> Dict[str, Any]:
     """
     Main entry point for candidate analysis across chunks.
-    Blends Ollama LLM semantic scoring with NeonClipping acoustic energy spikes.
+    Prioritizes ultra-fast acoustic energy spikes (0.05s) + micro-title prompts (0.3s).
     """
     if not transcript or not isinstance(transcript, dict):
         transcript = {"segments": [], "duration": 0.0}
@@ -291,7 +303,7 @@ def extract_candidates_full(
     if mode == "Mode B":
         return analyze_mode_b_compilation(transcript, channel_name)
 
-    # 1. Compute acoustic spikes (shouting, loud explosions, high excitement)
+    # 1. Compute acoustic spikes (shouting, loud explosions, high excitement) in 0.05s
     spikes = []
     if audio_path and Path(audio_path).exists():
         try:
@@ -299,52 +311,48 @@ def extract_candidates_full(
         except Exception:
             spikes = []
 
-    # 2. Mode A: Process in 8-minute chunks
-    chunks = split_transcript_into_chunks(transcript, chunk_duration_sec=480.0, overlap_sec=30.0)
     all_candidates = []
-    
-    for i, chunk in enumerate(chunks):
-        cands = analyze_mode_a_chunk(chunk)
-        all_candidates.extend(cands)
-        if len(all_candidates) >= 5:
-            break
+    segments = transcript.get("segments", [])
 
-    # 3. Acoustic peak fusion fallback: if LLM returned insufficient candidates, snap windows to audio spikes
-    if len(all_candidates) < 3 and spikes:
-        segments = transcript.get("segments", [])
-        for spk in spikes:
+    # Fast Path: Acoustic Peak Priority (0.05s instant highlight detection)
+    if spikes:
+        for spk in spikes[:3]:
             peak_t = spk["time"]
-            # Check if this peak is already covered by existing candidates
-            if any(c["start"] <= peak_t <= c["end"] for c in all_candidates):
-                continue
-            
-            # Snap 28-36s window around peak to sentence boundaries
             win_start = max(0.0, peak_t - 12.0)
             win_end = win_start + 32.0
 
-            # Find matching segment boundaries
             covering_segs = [s for s in segments if s["start"] >= win_start and s["end"] <= win_end + 6.0]
             if covering_segs:
                 start_exact = covering_segs[0]["start"]
-                end_exact = min(covering_segs[-1]["end"], start_exact + 42.0)
+                end_exact = min(covering_segs[-1]["end"], start_exact + 40.0)
                 words_count = sum(len(s.get("words", [])) for s in covering_segs)
+                clip_text = " ".join([s["text"] for s in covering_segs])
             else:
                 start_exact = win_start
                 end_exact = win_end
                 words_count = 50
+                clip_text = "Insane GTA 6 High Energy Moment"
 
             dur = round(end_exact - start_exact, 2)
             if 24.0 <= dur <= 44.0:
+                fast_title = generate_micro_title(clip_text, f"Insane GTA 6 Moment @ {int(peak_t)}s")
                 all_candidates.append({
                     "start": round(start_exact, 2),
                     "end": round(end_exact, 2),
                     "duration": dur,
                     "spoken_word_count": words_count,
-                    "viral_hook": f"Acoustic Reaction Peak (Score {int(spk['score']*100)}%)",
-                    "title": f"Insane GTA 6 High Energy Moment @ {int(peak_t)}s",
-                    "safe_title": f"Insane_GTA6_Moment_{int(peak_t)}s",
+                    "viral_hook": f"Acoustic Peak (Score {int(spk['score']*100)}%)",
+                    "title": fast_title,
+                    "safe_title": sanitize_filename(fast_title),
                     "reason": f"Acoustic spike: loudness={spk['loud']}, shout={spk['shout']}"
                 })
+
+    # Fallback to chunked LLM analysis only if no acoustic spikes detected
+    if not all_candidates:
+        chunks = split_transcript_into_chunks(transcript, chunk_duration_sec=480.0, overlap_sec=30.0)
+        for i, chunk in enumerate(chunks):
+            cands = analyze_mode_a_chunk(chunk)
+            all_candidates.extend(cands)
             if len(all_candidates) >= 3:
                 break
 

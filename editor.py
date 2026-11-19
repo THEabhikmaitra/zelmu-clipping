@@ -20,15 +20,15 @@ def get_best_video_encoder() -> List[str]:
     try:
         res_qsv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_qsv", "-f", "null", "-"], capture_output=True, timeout=2)
         if res_qsv.returncode == 0:
-            _BEST_ENCODER_CACHE = ["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23"]
+            _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23"]
             return _BEST_ENCODER_CACHE
         res_nv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, timeout=2)
         if res_nv.returncode == 0:
-            _BEST_ENCODER_CACHE = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]
+            _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]
             return _BEST_ENCODER_CACHE
     except Exception:
         pass
-    _BEST_ENCODER_CACHE = ["-c:v", "libx264", "-preset", "ultrafast", "-threads", "0", "-crf", "23"]
+    _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "libx264", "-preset", "ultrafast", "-threads", "0", "-crf", "23"]
     return _BEST_ENCODER_CACHE
 
 def escape_ffmpeg_path(path: Path) -> str:
@@ -188,7 +188,7 @@ def download_video_section(
         "--download-sections", section_arg,
         "--concurrent-fragments", "4",
         "--buffer-size", "16M",
-        "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best",
+        "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/bestvideo[height<=1080]+bestaudio/best",
         *ffmpeg_loc_arg,
         "-o", f"{stem_template}.%(ext)s",
         url

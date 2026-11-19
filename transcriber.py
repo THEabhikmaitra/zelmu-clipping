@@ -317,12 +317,12 @@ def fetch_youtube_captions(
 def transcribe_audio_whisper(
     audio_path: Path,
     output_json_path: Path,
-    model_size: str = "small",
+    model_size: str = "tiny.en",
     compute_type: str = "int8",
     progress_callback: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
-    Runs faster-whisper with word-level timestamps and int8 quantization.
+    Runs faster-whisper with BatchedInference (8x threads) and int8 quantization.
     Reports real-time segment progress and immediately cleans up RAM.
     """
     audio_path = audio_path.resolve()
@@ -333,19 +333,21 @@ def transcribe_audio_whisper(
         with open(output_json_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
-    from faster_whisper import WhisperModel
+    from faster_whisper import WhisperModel, BatchedInferencePipeline
 
     if progress_callback:
-        progress_callback(0, 0, "Initializing faster-whisper model (int8 CPU)...")
+        progress_callback(0, 0, f"Initializing faster-whisper model ({model_size} int8 CPU)...")
 
-    # Load model on CPU with int8 to prevent memory exhaustion
-    model = WhisperModel(model_size, device="cpu", compute_type=compute_type)
+    # Load model on CPU with int8 and 8 worker threads
+    model = WhisperModel(model_size, device="cpu", compute_type=compute_type, cpu_threads=8)
+    batched_model = BatchedInferencePipeline(model=model)
 
     if progress_callback:
-        progress_callback(0, 0, "Model loaded in RAM. Starting voice transcription...")
+        progress_callback(0, 0, "Batched model loaded in RAM. Starting ultra-fast transcription...")
     
-    segments, info = model.transcribe(
+    segments, info = batched_model.transcribe(
         str(audio_path),
+        batch_size=8,
         word_timestamps=True,
         vad_filter=True,
         vad_parameters=dict(min_silence_duration_ms=500)
