@@ -191,6 +191,42 @@ def log_upload(filename: str, video_id: str, title: str):
         writer.writerow([now_str, filename, video_id, title, studio_url, "private"])
 
 
+def format_seo_title(raw_title: str) -> str:
+    """Cleans and optimizes title with high-CTR keywords and #Shorts tag."""
+    import re
+    cleaned = raw_title.replace("_", " ").strip()
+    cleaned = re.sub(r'\b\d+s\b', '', cleaned).strip()
+    if not cleaned:
+        cleaned = "Insane GTA 6 Moment"
+
+    full_title = f"{cleaned} 🤯 #GTA6 #Shorts"
+    if len(full_title) > 100:
+        full_title = full_title[:90] + "... #Shorts"
+    return full_title
+
+
+def format_seo_description(title: str, custom_desc: str = "") -> str:
+    """Builds 4-layer YouTube SEO description with keywords, CTA, hashtags, and fair use."""
+    clean_title = title.replace("#GTA6", "").replace("#Shorts", "").replace("🤯", "").strip()
+    return (
+        f"🔥 {clean_title} in Grand Theft Auto VI (GTA 6)!\n\n"
+        f"Subscribe to @zelmuesports for daily GTA 6 leaks, secrets, and gameplay highlights!\n\n"
+        f"🎮 Featured Game: Grand Theft Auto VI (Rockstar Games)\n"
+        f"📌 Topics: GTA 6 Gameplay, Vice City, Lucia & Jason, PS5 & Xbox Series X\n\n"
+        f"#Shorts #GTA6 #GrandTheftAuto6 #Gaming #GTA6Gameplay\n\n"
+        f"---\n"
+        f"Disclaimer: Transformed gameplay highlight edited with dynamic pacing, audio-reactive subtitles, and commentary under Fair Use for entertainment purposes."
+    )
+
+
+SEO_TAGS = [
+    "GTA6", "GTA 6", "Grand Theft Auto VI", "GTA 6 Shorts",
+    "GTA6 Gameplay", "GTA 6 Leaks", "Rockstar Games", "Vice City",
+    "Lucia GTA 6", "Jason GTA 6", "GTA VI", "Gaming Shorts",
+    "GTA6 Trailer", "GTA 6 Graphics", "Gaming", "Zelmu Esports"
+]
+
+
 def upload_single_video(
     youtube,
     file_path: Path,
@@ -206,19 +242,15 @@ def upload_single_video(
     if not file_path.exists():
         raise FileNotFoundError(f"Video file does not exist: {file_path}")
 
-    full_title = f"{title} #GTA6 #Shorts"
-    if len(full_title) > 100:
-        full_title = full_title[:97] + "..."
+    full_title = format_seo_title(title)
 
-    full_tags = ["GTA6", "Grand Theft Auto VI", "Shorts", "Gaming", "GTA6 Gameplay"]
+    full_tags = list(SEO_TAGS)
     if tags:
-        full_tags.extend(tags)
+        for t in tags:
+            if t not in full_tags:
+                full_tags.append(t)
 
-    full_description = (
-        f"{description}\n\n"
-        "#GTA6 #Shorts #GrandTheftAuto6\n"
-        "Transformed gameplay highlight. Created for entertainment and commentary purposes."
-    )
+    full_description = format_seo_description(full_title, description)
 
     body = {
         "snippet": {
@@ -231,7 +263,8 @@ def upload_single_video(
         },
         "status": {
             "privacyStatus": "private",  # Strictly enforce private status
-            "selfDeclaredMadeForKids": False
+            "selfDeclaredMadeForKids": False,
+            "embeddable": True
         }
     }
 
