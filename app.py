@@ -1275,7 +1275,18 @@ with tab2:
         )
         slots_per_day = 6 if "6" in cadence_option else (12 if "12" in cadence_option else 3)
 
-    batch_cap = st.slider("Max Upload Queue Limit", min_value=5, max_value=250, value=min(100, max(5, len(ready_videos))), step=5)
+    col_cfg1, col_cfg2 = st.columns([1, 1])
+    with col_cfg1:
+        batch_cap = st.slider("Max Upload Queue Limit", min_value=5, max_value=250, value=min(100, max(5, len(ready_videos))), step=5)
+    with col_cfg2:
+        upload_concurrency = st.radio(
+            "Upload Speed Optimizer",
+            options=[2, 1],
+            format_func=lambda x: "⚡ Turbo Parallel (2 Concurrent Streams - 2x Speed)" if x == 2 else "🐢 Sequential (1 Stream)",
+            index=0,
+            horizontal=True,
+            help="Turbo streams 2 videos simultaneously, saturating bandwidth and overlapping Google API roundtrips."
+        )
 
     if auto_sched and ready_videos:
         q_count = min(len(ready_videos), batch_cap)
@@ -1293,25 +1304,84 @@ with tab2:
     )
 
     if upload_btn:
+        u_labor_box = st.empty()
         u_progress = st.progress(0.0)
         u_status = st.empty()
+        u_log_box = st.empty()
 
-        def update_ui(current, total, filename):
-            u_progress.progress((current - 1) / max(1, total))
-            u_status.info(f"Preparing [{current}/{total}]: {filename}...")
+        upload_logs = []
+        t_batch_start = time.time()
 
-        def update_chunk(current, total, filename, pct):
-            overall = ((current - 1) + (pct / 100.0)) / max(1, total)
-            u_progress.progress(min(1.0, max(0.0, overall)))
-            u_status.info(f"Uploading [{current}/{total}]: {filename} ({pct}%)")
+        def on_upload_log(msg: str):
+            timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+            formatted = f"[{timestamp}] {msg}"
+            upload_logs.append(formatted)
+            try:
+                u_log_box.code("\n".join(upload_logs[-12:]), language="bash")
+            except Exception:
+                pass
+
+        def on_upload_chunk(t: dict):
+            try:
+                u_progress.progress(min(1.0, max(0.0, t.get("overall_pct", 0) / 100.0)))
+
+                eta_s = t.get("eta_sec", 0.0)
+                eta_str = f"{int(eta_s // 60):02d}:{int(eta_s % 60):02d}"
+                elapsed_str = format_elapsed(time.time() - t_batch_start)
+                active_stream_str = f"{t.get('active_workers', 1)} Stream(s) Active"
+
+                speed_mbs = t.get("speed_MBs", 0.0)
+                speed_mbps = t.get("speed_mbps", 0.0)
+                bytes_mb = t.get("overall_bytes_mb", 0.0)
+                total_mb = t.get("total_batch_mb", 0.0)
+                curr_f = t.get("current_file", "Processing")
+                file_pct = t.get("file_pct", 0)
+                done_c = t.get("completed_count", 0)
+                tot_c = t.get("total_count", 1)
+                ov_pct = t.get("overall_pct", 0)
+
+                labor_html = f"""
+                <div class="labor-card" style="margin-bottom: 0.85rem;">
+                    <div class="labor-top-row">
+                        <div class="labor-stage">
+                            <span class="labor-dot"></span>
+                            <span>YouTube Upload Center &bull; [{done_c}/{tot_c} Completed] &bull; {active_stream_str}</span>
+                        </div>
+                        <div class="labor-pct">{ov_pct}%</div>
+                    </div>
+                    <div class="labor-subtask">{curr_f} ({file_pct}%)</div>
+                    <div class="labor-data-grid">
+                        <div class="labor-data-cell">
+                            <span class="labor-label">Transfer Speed</span>
+                            <span class="labor-val" style="color: #22c55e;">{speed_mbs:.2f} MB/s ({speed_mbps:.1f} Mbps)</span>
+                        </div>
+                        <div class="labor-data-cell">
+                            <span class="labor-label">Transferred</span>
+                            <span class="labor-val">{bytes_mb:.1f} / {total_mb:.1f} MB</span>
+                        </div>
+                        <div class="labor-data-cell">
+                            <span class="labor-label">Elapsed / ETA</span>
+                            <span class="labor-val">{elapsed_str} / {eta_str}</span>
+                        </div>
+                        <div class="labor-data-cell">
+                            <span class="labor-label">Batch Queue</span>
+                            <span class="labor-val">{done_c} of {tot_c} Done</span>
+                        </div>
+                    </div>
+                </div>
+                """
+                u_labor_box.markdown(labor_html, unsafe_allow_html=True)
+            except Exception:
+                pass
 
         try:
             results = upload_batch_private(
                 max_batch_size=batch_cap,
                 auto_schedule=auto_sched,
                 slots_per_day=slots_per_day,
-                progress_callback=update_ui,
-                chunk_callback=update_chunk
+                concurrency=upload_concurrency,
+                chunk_callback=on_upload_chunk,
+                log_callback=on_upload_log
             )
             u_progress.progress(1.0)
             u_status.success(f"Successfully processed {len(results)} clips on YouTube!")
@@ -1324,10 +1394,66 @@ with tab2:
         except Exception as e:
             u_status.error(f"Upload failed: {str(e)}")
 
-    st.markdown("<div class='section-title'>UPLOAD HISTORY</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>UPLOAD HISTORY & DATA ANALYTICS</div>", unsafe_allow_html=True)
     if LOG_FILE.exists():
         import pandas as pd
         df = pd.read_csv(LOG_FILE)
-        st.dataframe(df, use_container_width=True)
+
+        for col in ["File_Size_MB", "Upload_Sec", "Speed_MBps"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+        total_uploads = len(df)
+        total_mb = df["File_Size_MB"].sum() if "File_Size_MB" in df.columns else 0.0
+        avg_speed = df["Speed_MBps"].mean() if "Speed_MBps" in df.columns else 0.0
+        quota_used = total_uploads * 1600
+
+        # Telemetry Data Grid
+        m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+        with m_col1:
+            st.metric("Total Shorts Uploaded", f"{total_uploads} clips")
+        with m_col2:
+            if total_mb >= 1024:
+                st.metric("Data Transferred", f"{total_mb / 1024:.2f} GB")
+            else:
+                st.metric("Data Transferred", f"{total_mb:.1f} MB")
+        with m_col3:
+            st.metric("Avg Upload Speed", f"{avg_speed:.1f} Mbps")
+        with m_col4:
+            st.metric("Est. Quota Used", f"{quota_used:,} / 10,000")
+
+        if quota_used >= 8000:
+            st.warning(f"⚠️ YouTube API Quota Warning: ~{quota_used:,} units consumed today (Standard default quota limit is 10,000/day).")
+
+        st.dataframe(
+            df,
+            column_config={
+                "Studio_URL": st.column_config.LinkColumn("YouTube Studio", display_text="Edit in Studio ↗"),
+                "Scheduled_Time": st.column_config.TextColumn("Scheduled Release"),
+                "Speed_MBps": st.column_config.NumberColumn("Transfer Speed", format="%.1f Mbps"),
+                "File_Size_MB": st.column_config.NumberColumn("File Size", format="%.1f MB"),
+                "Upload_Sec": st.column_config.NumberColumn("Duration", format="%.1f s"),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+
+        col_csv1, col_csv2 = st.columns([1, 1])
+        with col_csv1:
+            csv_bytes = df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "📥 Export Upload Report (.csv)",
+                data=csv_bytes,
+                file_name=f"zelmu_upload_report_{int(time.time())}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        with col_csv2:
+            if st.button("Clear Upload History", type="secondary", use_container_width=True):
+                try:
+                    LOG_FILE.unlink()
+                except Exception:
+                    pass
+                st.rerun()
     else:
         st.caption("No upload history recorded yet.")
