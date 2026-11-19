@@ -30,6 +30,7 @@ uploaded_archive/
 
 # Logs
 upload_history.log
+upload_log.csv
 *.log
 
 # Python Cache & OS metadata

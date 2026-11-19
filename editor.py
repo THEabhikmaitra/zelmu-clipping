@@ -284,16 +284,17 @@ def render_mode_a_short(
     flagged_profanities: List[Dict[str, Any]],
     split_layout: bool = False,
     facecam_position: str = "top-left",
+    enable_tracking: bool = True,
     logo_path: Optional[Path] = None
 ) -> Path:
     """
     Renders Mode A viral short:
-    - 9:16 vertical crop (1080x1920).
-    - Micro-Pacing zoom punch-in (1.00x to 1.08x toggle every 3.5 seconds).
+    - Dynamic YOLOX-S player tracking (smooth 16:9 -> 9:16 pan) or micro-pacing center zoom.
+    - 4-way facecam split layout.
     - Center safe-zone karaoke captions burned in.
     - Optional channel logo/watermark overlay (top-right safe zone).
     - Profanity audio mute (0.4s).
-    - Safe CPU execution: -preset veryfast -threads 2 -crf 23.
+    - Hardware acceleration: Intel QSV (350+ fps) or CPU fallback.
     """
     output_short_path = output_short_path.resolve()
     output_short_path.parent.mkdir(parents=True, exist_ok=True)
@@ -303,7 +304,23 @@ def render_mode_a_short(
 
     has_logo = logo_path and Path(logo_path).exists()
 
-    if not split_layout:
+    tracking_keys = None
+    if enable_tracking and not split_layout:
+        try:
+            from tracker import track_player
+            tracking_keys = track_player(str(source_video.resolve()))
+        except Exception:
+            tracking_keys = None
+
+    if tracking_keys:
+        from tracker import generate_panning_crop_expr
+        crop_x = generate_panning_crop_expr(tracking_keys, out_w=1080)
+        base_filter = (
+            f"[0:v]scale=-2:1920,"
+            f"crop=1080:1920:'{crop_x}':0,"
+            f"subtitles='{esc_sub}'"
+        )
+    elif not split_layout:
         base_filter = (
             f"[0:v]crop='if(between(mod(t,7),3.5,7), in_h*9/16/1.08, in_h*9/16)':'if(between(mod(t,7),3.5,7), in_h/1.08, in_h)':"
             f"'(in_w-out_w)/2':'(in_h-out_h)/2',"

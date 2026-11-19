@@ -673,7 +673,9 @@ with tab1:
         cam_position = "Top-Left"
         caption_style = "GTA Neon (Cyan/Pink)"
 
+        enable_yolox = False
         if "Mode A" in mode:
+            enable_yolox = st.checkbox("Dynamic Player Tracking (YOLOX-S)", value=True, help="Follows player dynamically across 16:9 frame")
             split_cam = st.checkbox("Facecam split (9:16)", value=False)
             if split_cam:
                 cam_position = st.selectbox(
@@ -963,7 +965,8 @@ with tab1:
                                 output_short_path=final_dest,
                                 flagged_profanities=flagged,
                                 split_layout=split_cam,
-                                facecam_position=cam_position.lower(),
+                                facecam_position=cam_position.lower() if split_cam else "top-left",
+                                enable_tracking=enable_yolox,
                                 logo_path=active_logo_path
                             )
                             push_log(f"Rendered: {final_dest.name}")
