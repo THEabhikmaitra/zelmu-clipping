@@ -187,19 +187,27 @@ OUTPUT FORMAT: Return valid JSON ONLY:
     result = query_ollama_json(prompt)
     if not result or "clips" not in result or len(result.get("clips", [])) < 3:
         # Fallback template if Ollama gave incomplete clips
+        c1_start = segments[0]["start"] if segments else 10.0
+        c2_start = segments[len(segments)//2]["start"] if len(segments) > 2 else 60.0
+        c3_start = segments[-1]["start"] - 12.0 if len(segments) > 4 else 120.0
         return {
-            "title": "Top 3 Insane GTA 6 Moments You Missed",
+            "mode": "Mode B",
+            "title": "Top 3 Insane GTA 6 Moments Ranked",
             "theme": "Epic Moments",
             "clips": [
-                {"start": 10.0, "end": 20.0, "duration": 10.0, "summary": "Moment 1"},
-                {"start": 60.0, "end": 70.0, "duration": 10.0, "summary": "Moment 2"},
-                {"start": 120.0, "end": 130.0, "duration": 10.0, "summary": "Moment 3"}
+                {"start": round(c1_start, 2), "end": round(c1_start + 10.0, 2), "duration": 10.0, "summary": "Moment 1"},
+                {"start": round(c2_start, 2), "end": round(c2_start + 10.0, 2), "duration": 10.0, "summary": "Moment 2"},
+                {"start": round(c3_start, 2), "end": round(c3_start + 10.0, 2), "duration": 10.0, "summary": "Moment 3"}
             ],
-            "voiceover_script": "Here are three unbelievable GTA 6 moments you have to see. Check out this first play! Next up is even crazier! And you won't believe what happens in this final clip!",
-            "credit": f"@{channel_name}"
+            "voiceover_script": "Here are three unbelievable GTA 6 moments you have to see right now. First up is this insane play. But wait until you see what happens in this next clip! And you won't believe how this final sequence played out!",
+            "credit": f"@{channel_name}",
+            "safe_title": sanitize_filename("GTA6_Top_3_Moments_Ranked")
         }
 
+    result["mode"] = "Mode B"
     result["safe_title"] = sanitize_filename(result.get("title", "GTA_6_Transformative_Short"))
+    if not result.get("voiceover_script"):
+        result["voiceover_script"] = "Here are three unbelievable GTA 6 moments you have to see right now! Let's get right into the action."
     return result
 
 def calculate_audio_spikes(

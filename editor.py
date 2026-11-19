@@ -255,9 +255,14 @@ def generate_piper_tts(
 ) -> Path:
     """
     Generates offline narration via python -m piper.
+    Guards against empty input to prevent Python wave.Error (# channels not specified).
     """
     output_wav_path = output_wav_path.resolve()
     output_wav_path.parent.mkdir(parents=True, exist_ok=True)
+
+    clean_text = (text or "").strip()
+    if not clean_text or len(clean_text) < 4:
+        clean_text = "Here are the top three unbelievable GTA 6 moments you have to see right now! Let's get right into the action."
 
     model_onnx_path = model_onnx_path.resolve()
     if not model_onnx_path.exists():
@@ -272,7 +277,7 @@ def generate_piper_tts(
     ]
 
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    stdout, stderr = proc.communicate(input=text)
+    stdout, stderr = proc.communicate(input=clean_text)
     if proc.returncode != 0:
         raise RuntimeError(f"Piper TTS generation failed: {stderr}")
 

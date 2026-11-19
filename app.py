@@ -883,21 +883,37 @@ with tab1:
                         transcript = transcribe_audio_whisper(audio_wav, transcript_json, progress_callback=on_whisper_progress)
                         push_log("Transcription complete. Saved to 02_transcript.json")
     
-                    # Checkpoint 03: Ollama Candidates Analysis (with Acoustic Peak Fusion)
-                    candidates_json = work_dir / "03_candidates.json"
+                    # Checkpoint 03: Candidate Analysis (Mode-Isolated Cache)
                     target_mode = "Mode B" if "Mode B" in mode else "Mode A"
+                    mode_slug = "mode_b" if target_mode == "Mode B" else "mode_a"
+                    candidates_json = work_dir / f"03_candidates_{mode_slug}.json"
                     
+                    # Backward-compatibility check for legacy un-suffixed cache
+                    analysis = None
                     if not candidates_json.exists():
+                        legacy_json = work_dir / "03_candidates.json"
+                        if legacy_json.exists():
+                            try:
+                                with open(legacy_json, "r", encoding="utf-8") as f:
+                                    cached_cand = json.load(f)
+                                if cached_cand.get("mode") == target_mode:
+                                    analysis = cached_cand
+                                    with open(candidates_json, "w", encoding="utf-8") as f:
+                                        json.dump(analysis, f, indent=2)
+                            except Exception:
+                                analysis = None
+
+                    if not candidates_json.exists() or analysis is None:
                         render_labor_card(
                             labor_box,
                             stage_name="Stage 3/5: AI Hook & Candidate Analysis",
                             pct=65,
                             elapsed_str=format_elapsed(time.time() - t_start),
-                            current_subtask=f"Ollama {MODEL_NAME} evaluation",
+                            current_subtask=f"Analyzing {target_mode} candidates...",
                             throughput="Turbo analysis",
-                            mem_stat="Local LLM"
+                            mem_stat="Active"
                         )
-                        push_log(f"Evaluating transcript with {MODEL_NAME} ({target_mode})...")
+                        push_log(f"Evaluating highlights for {target_mode}...")
                         analysis = extract_candidates_full(
                             transcript,
                             mode=target_mode,
@@ -907,11 +923,10 @@ with tab1:
                         )
                         with open(candidates_json, "w", encoding="utf-8") as f:
                             json.dump(analysis, f, indent=2)
-                        push_log(f"AI analysis complete. Selected {len(analysis.get('candidates', []))} candidate clips.")
+                        cand_count = len(analysis.get("candidates", [])) if target_mode == "Mode A" else len(analysis.get("clips", []))
+                        push_log(f"AI analysis complete. Selected {cand_count} {target_mode} clip(s).")
                     else:
-                        push_log("Reusing cached 03_candidates.json")
-                        with open(candidates_json, "r", encoding="utf-8") as f:
-                            analysis = json.load(f)
+                        push_log(f"Reusing cached 03_candidates_{mode_slug}.json")
     
                     # Checkpoint 04 & Final Render
                     segments_dir = work_dir / "04_segments"
