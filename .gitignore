@@ -1,0 +1,43 @@
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# Binaries & Large AI Models (>100MB blocked by GitHub)
+bin/
+*.onnx
+*.onnx.json
+
+# Credentials & OAuth Tokens (CRITICAL FOR PUBLIC REPOS)
+client_secrets.json
+token.json
+*.pem
+*.key
+.env
+
+# Processing Workspace & Video Storage
+workspace/
+input_videos/
+ready_to_upload/
+uploaded_archive/
+*.mp4
+*.wav
+*.mp3
+*.ass
+*.srt
+*.vtt
+
+# Logs
+upload_history.log
+*.log
+
+# Python Cache & OS metadata
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+Thumbs.db
+
+# Streamlit Local Runtime
+.streamlit/secrets.toml
