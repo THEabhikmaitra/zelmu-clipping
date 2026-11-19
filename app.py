@@ -455,11 +455,30 @@ st.markdown("""
         background-color: #0c0c0e !important;
         border: 1px solid #27272a !important;
         border-radius: 6px !important;
+        position: relative !important;
     }
     div[data-testid="stCode"] pre {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
         font-size: 11.5px !important;
         color: #a1a1aa !important;
+        max-height: 320px !important;
+        overflow-y: auto !important;
+    }
+    div[data-testid="stCode"] button[title="Copy to clipboard"],
+    div[data-testid="stCode"] [data-testid="stCodeCopyButton"] {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 0.85 !important;
+        background: #18181b !important;
+        border: 1px solid #27272a !important;
+        border-radius: 4px !important;
+        color: #f4f4f5 !important;
+    }
+    div[data-testid="stCode"] button[title="Copy to clipboard"]:hover,
+    div[data-testid="stCode"] [data-testid="stCodeCopyButton"]:hover {
+        opacity: 1 !important;
+        background: #27272a !important;
+        border-color: #3f3f46 !important;
     }
     .section-title {
         font-size: 0.72rem;
@@ -683,14 +702,12 @@ with tab1:
             status_box = st.empty()
             detail_box = st.empty()
 
-            recent_logs = []
+            full_logs = []
             def push_log(msg: str):
                 ts = datetime.datetime.now().strftime("%H:%M:%S")
                 msg_clean = re.sub(r"\s+", " ", msg.strip())
-                recent_logs.append(f"[{ts}] {msg_clean}")
-                if len(recent_logs) > 8:
-                    recent_logs.pop(0)
-                detail_box.code("\n".join(recent_logs), language="bash")
+                full_logs.append(f"[{ts}] {msg_clean}")
+                detail_box.code("\n".join(full_logs), language="bash")
 
             for url_idx, raw_url in enumerate(urls):
                 t_start = time.time()
@@ -976,6 +993,20 @@ with tab1:
                 mem_stat="All systems OK"
             )
             status_box.success("Complete: batch processed.")
+
+            if full_logs:
+                col_log1, col_log2 = st.columns([1, 1])
+                with col_log1:
+                    st.download_button(
+                        "📥 Download Full Execution Log (.txt)",
+                        data="\n".join(full_logs),
+                        file_name=f"zelmu_execution_{int(time.time())}.txt",
+                        mime="text/plain",
+                        use_container_width=True
+                    )
+                with col_log2:
+                    with st.expander("📋 View & Select Full Raw Log"):
+                        st.text_area("Full Log", value="\n".join(full_logs), height=240, label_visibility="collapsed")
 
     st.markdown("<div class='section-title'>READY CLIPS</div>", unsafe_allow_html=True)
     ready_files = sorted(list(READY_DIR.glob("*.mp4")))
