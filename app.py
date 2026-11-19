@@ -38,7 +38,8 @@ from editor import (
     download_video_section,
     generate_piper_tts,
     render_mode_a_short,
-    render_mode_b_short
+    render_mode_b_short,
+    check_internet_connection
 )
 from uploader import (
     upload_batch_private,
@@ -704,9 +705,36 @@ with tab1:
         elif "First 30" in scan_window:
             max_scan_sec = 1800.0
 
-    start_btn = st.button("Produce Shorts", type="primary", use_container_width=True)
+    # Internet Disconnect Pause / Resume Banner
+    if st.session_state.get("pipeline_paused"):
+        online = check_internet_connection()
+        conn_badge = "🟢 Internet Active" if online else "🔴 Offline (Reconnect network)"
+        st.markdown(f"""
+        <div style="background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 8px; padding: 14px; margin: 12px 0;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div style="font-weight: 700; color: #f87171; font-size: 1.05rem;">⏸️ Pipeline Paused: Internet Disconnected</div>
+                <div style="font-size: 0.85rem; font-weight: 600; color: {'#4ade80' if online else '#f87171'};">{conn_badge}</div>
+            </div>
+            <div style="font-size: 0.85rem; color: #cbd5e1; margin-top: 6px;">
+                Network connection dropped during video download. All metadata, audio, and transcript checkpoints are safely cached on disk.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        col_res1, col_res2 = st.columns([2, 1])
+        with col_res1:
+            if st.button("🔄 Resume Pipeline (Try Again)", type="primary", use_container_width=True, key="resume_top_btn"):
+                st.session_state["pipeline_paused"] = False
+                st.session_state["trigger_produce"] = True
+                st.rerun()
+        with col_res2:
+            if st.button("Dismiss / Clear", use_container_width=True, key="clear_pause_top"):
+                st.session_state["pipeline_paused"] = False
+                st.rerun()
 
-    if start_btn:
+    start_btn = st.button("Produce Shorts", type="primary", use_container_width=True)
+    should_run = start_btn or st.session_state.pop("trigger_produce", False)
+
+    if should_run:
         urls = [u.strip() for u in url_input.splitlines() if u.strip()]
         if not urls:
             st.warning("Please provide at least one valid video URL.")
@@ -724,277 +752,312 @@ with tab1:
 
             for url_idx, raw_url in enumerate(urls):
                 t_start = time.time()
-                render_labor_card(
-                    labor_box,
-                    stage_name="Stage 0/5: Querying Video Metadata",
-                    pct=5,
-                    elapsed_str=format_elapsed(0),
-                    current_subtask=f"Connecting to {raw_url[:30]}...",
-                    throughput="Network fetch",
-                    mem_stat="Ready"
-                )
-                push_log(f"Extracting video metadata from {raw_url}...")
-
-                meta = get_video_metadata(raw_url)
-                vid_id = meta.get("id") or get_video_id(raw_url)
-                uploader_name = meta.get("channel") or meta.get("uploader") or "Creator"
-                detected_handle = f"@{uploader_name}" if not uploader_name.startswith("@") else uploader_name
-                active_credit = channel_credit.strip() if channel_credit.strip() else detected_handle
-                is_live = meta.get("is_live", False)
-                was_live = meta.get("was_live", False)
-
-                if is_live:
-                    status_box.error(f"HALTED: '{meta.get('title', vid_id)}' is currently live.")
-                    push_log("ERROR: Video is currently live stream. Halted.")
-                    continue
-                elif was_live:
-                    status_box.info("Video is an ended live stream (VOD).")
-                    push_log("Video is archived VOD stream.")
-
-                work_dir = WORKSPACE_DIR / vid_id
-                work_dir.mkdir(parents=True, exist_ok=True)
-
-                # Save 00_meta.json
-                meta_json = work_dir / "00_meta.json"
-                with open(meta_json, "w", encoding="utf-8") as f:
-                    json.dump(meta, f, indent=2)
-                
-                push_log(f"Channel: {detected_handle} | Video ID: {vid_id}")
-
-                # Checkpoint 01: Instant YouTube Word-Timed Captions (Zero-Audio Fast Path)
-                transcript_json = work_dir / "02_transcript.json"
-                transcript = None
-                if transcript_json.exists() and transcript_json.stat().st_size > 100:
-                    push_log("Reusing cached 02_transcript.json")
-                    with open(transcript_json, "r", encoding="utf-8") as f:
-                        transcript = json.load(f)
-
-                if not transcript:
-                    push_log("Checking for instant YouTube word-timed captions (Fast Path)...")
+                try:
                     render_labor_card(
                         labor_box,
-                        stage_name="Stage 1/5: Word-Timed Captions (⚡ Fast Path)",
-                        pct=25,
-                        elapsed_str=format_elapsed(time.time() - t_start),
-                        current_subtask="Querying YouTube json3 subtitles...",
-                        throughput="Direct API fetch",
-                        mem_stat="Zero CPU"
+                        stage_name="Stage 0/5: Querying Video Metadata",
+                        pct=5,
+                        elapsed_str=format_elapsed(0),
+                        current_subtask=f"Connecting to {raw_url[:30]}...",
+                        throughput="Network fetch",
+                        mem_stat="Ready"
                     )
-                    transcript = fetch_youtube_captions(raw_url, transcript_json, max_duration_sec=max_scan_sec)
-                    if transcript:
-                        elapsed_str = format_elapsed(time.time() - t_start)
+                    push_log(f"Extracting video metadata from {raw_url}...")
+
+                    meta = get_video_metadata(raw_url)
+                    vid_id = meta.get("id") or get_video_id(raw_url)
+                    uploader_name = meta.get("channel") or meta.get("uploader") or "Creator"
+                    detected_handle = f"@{uploader_name}" if not uploader_name.startswith("@") else uploader_name
+                    active_credit = channel_credit.strip() if channel_credit.strip() else detected_handle
+                    is_live = meta.get("is_live", False)
+                    was_live = meta.get("was_live", False)
+    
+                    if is_live:
+                        status_box.error(f"HALTED: '{meta.get('title', vid_id)}' is currently live.")
+                        push_log("ERROR: Video is currently live stream. Halted.")
+                        continue
+                    elif was_live:
+                        status_box.info("Video is an ended live stream (VOD).")
+                        push_log("Video is archived VOD stream.")
+    
+                    work_dir = WORKSPACE_DIR / vid_id
+                    work_dir.mkdir(parents=True, exist_ok=True)
+    
+                    # Save 00_meta.json
+                    meta_json = work_dir / "00_meta.json"
+                    with open(meta_json, "w", encoding="utf-8") as f:
+                        json.dump(meta, f, indent=2)
+                    
+                    push_log(f"Channel: {detected_handle} | Video ID: {vid_id}")
+    
+                    # Checkpoint 01: Instant YouTube Word-Timed Captions (Zero-Audio Fast Path)
+                    transcript_json = work_dir / "02_transcript.json"
+                    transcript = None
+                    if transcript_json.exists() and transcript_json.stat().st_size > 100:
+                        push_log("Reusing cached 02_transcript.json")
+                        with open(transcript_json, "r", encoding="utf-8") as f:
+                            transcript = json.load(f)
+    
+                    if not transcript:
+                        push_log("Checking for instant YouTube word-timed captions (Fast Path)...")
                         render_labor_card(
                             labor_box,
-                            stage_name="Stage 1/5: Word-Timed Captions (⚡ Instant YT)",
-                            pct=100,
-                            elapsed_str=elapsed_str,
-                            current_subtask="YouTube json3 word-level subtitles",
-                            throughput="Zero CPU / Instant",
-                            mem_stat="Fast Path"
+                            stage_name="Stage 1/5: Word-Timed Captions (⚡ Fast Path)",
+                            pct=25,
+                            elapsed_str=format_elapsed(time.time() - t_start),
+                            current_subtask="Querying YouTube json3 subtitles...",
+                            throughput="Direct API fetch",
+                            mem_stat="Zero CPU"
                         )
-                        push_log(f"⚡ Instant YouTube word-timed captions parsed ({len(transcript.get('segments', []))} segments). Skipping 15m audio download!")
-
-                # Checkpoint 02: Fallback Audio Extraction + Faster-Whisper (ONLY if YouTube captions were absent)
-                audio_wav = work_dir / "01_audio.wav"
-                if not transcript:
-                    push_log("YouTube captions unavailable. Fast extracting audio for Whisper...")
-                    def on_audio_extract_progress(line: str):
-                        elapsed_s = format_elapsed(time.time() - t_start)
-                        dl_pct = 20
-                        m = re.search(r"(\d+(?:\.\d+)?)%", line)
-                        if m:
-                            dl_pct = int(float(m.group(1)))
-                        render_labor_card(
-                            labor_box,
-                            stage_name="Stage 1/5: Audio Extraction",
-                            pct=dl_pct,
-                            elapsed_str=elapsed_s,
-                            current_subtask="yt-dlp stream extraction",
-                            throughput="Fast m4a stream",
-                            mem_stat="Active"
-                        )
-                        push_log(line)
-
-                    extract_audio_wav(raw_url, audio_wav, max_duration_sec=max_scan_sec, progress_callback=on_audio_extract_progress)
-                    push_log(f"Audio extracted successfully: {audio_wav.name}")
-
-                    push_log("Initializing Faster-Whisper (int8 CPU)...")
-                    def on_whisper_progress(curr, total, snippet):
-                        pct = min(100, int((curr / max(1.0, total)) * 100)) if total > 0 else 0
-                        elapsed_str = format_elapsed(time.time() - t_start)
-                        render_labor_card(
-                            labor_box,
-                            stage_name="Stage 2/5: Voice Transcription",
-                            pct=pct,
-                            elapsed_str=elapsed_str,
-                            current_subtask=f'"{snippet[:28]}..."' if snippet else "Transcribing...",
-                            throughput=f"{format_elapsed(curr)} / {format_elapsed(total)}",
-                            mem_stat="int8 CPU"
-                        )
-                        push_log(f"Whisper: {snippet}")
-
-                    transcript = transcribe_audio_whisper(audio_wav, transcript_json, progress_callback=on_whisper_progress)
-                    push_log("Transcription complete. Saved to 02_transcript.json")
-
-                # Checkpoint 03: Ollama Candidates Analysis (with Acoustic Peak Fusion)
-                candidates_json = work_dir / "03_candidates.json"
-                target_mode = "Mode B" if "Mode B" in mode else "Mode A"
-                
-                if not candidates_json.exists():
-                    render_labor_card(
-                        labor_box,
-                        stage_name="Stage 3/5: AI Hook & Candidate Analysis",
-                        pct=65,
-                        elapsed_str=format_elapsed(time.time() - t_start),
-                        current_subtask=f"Ollama {MODEL_NAME} evaluation",
-                        throughput="Turbo analysis",
-                        mem_stat="Local LLM"
-                    )
-                    push_log(f"Evaluating transcript with {MODEL_NAME} ({target_mode})...")
-                    analysis = extract_candidates_full(
-                        transcript,
-                        mode=target_mode,
-                        channel_name=active_credit,
-                        audio_path=audio_wav if audio_wav.exists() else None
-                    )
-                    with open(candidates_json, "w", encoding="utf-8") as f:
-                        json.dump(analysis, f, indent=2)
-                    push_log("AI analysis complete. Selected candidate clips.")
-                else:
-                    push_log("Reusing cached 03_candidates.json")
-                    with open(candidates_json, "r", encoding="utf-8") as f:
-                        analysis = json.load(f)
-
-                # Checkpoint 04 & Final Render
-                segments_dir = work_dir / "04_segments"
-                segments_dir.mkdir(parents=True, exist_ok=True)
-
-                if target_mode == "Mode A":
-                    candidates = analysis.get("candidates", [])
-                    style_key = "neon" if "Neon" in caption_style else ("clean" if "Clean" in caption_style else "karaoke")
-
-                    for c_idx, cand in enumerate(candidates):
-                        start_t = cand["start"]
-                        end_t = cand["end"]
-                        safe_title = cand.get("safe_title", f"GTA6_Moment_{c_idx+1}")
-                        final_dest = READY_DIR / f"{safe_title}.mp4"
-
-                        if final_dest.exists() and final_dest.stat().st_size > 102400:
-                            push_log(f"Short '{safe_title}' already exists.")
-                            continue
-
-                        # Section download with live stdout
-                        raw_seg = segments_dir / f"seg_raw_{c_idx}.mp4"
-                        push_log(f"Downloading clip {c_idx+1}/{len(candidates)} ({start_t}s - {end_t}s)...")
-                        def on_clip_dl(line: str):
-                            elapsed_s = format_elapsed(time.time() - t_start)
+                        transcript = fetch_youtube_captions(raw_url, transcript_json, max_duration_sec=max_scan_sec)
+                        if transcript:
+                            elapsed_str = format_elapsed(time.time() - t_start)
                             render_labor_card(
                                 labor_box,
-                                stage_name=f"Stage 4/5: Downloading Clip {c_idx+1}/{len(candidates)}",
-                                pct=75,
+                                stage_name="Stage 1/5: Word-Timed Captions (⚡ Instant YT)",
+                                pct=100,
+                                elapsed_str=elapsed_str,
+                                current_subtask="YouTube json3 word-level subtitles",
+                                throughput="Zero CPU / Instant",
+                                mem_stat="Fast Path"
+                            )
+                            push_log(f"⚡ Instant YouTube word-timed captions parsed ({len(transcript.get('segments', []))} segments). Skipping 15m audio download!")
+    
+                    # Checkpoint 02: Fallback Audio Extraction + Faster-Whisper (ONLY if YouTube captions were absent)
+                    audio_wav = work_dir / "01_audio.wav"
+                    if not transcript:
+                        push_log("YouTube captions unavailable. Fast extracting audio for Whisper...")
+                        def on_audio_extract_progress(line: str):
+                            elapsed_s = format_elapsed(time.time() - t_start)
+                            dl_pct = 20
+                            m = re.search(r"(\d+(?:\.\d+)?)%", line)
+                            if m:
+                                dl_pct = int(float(m.group(1)))
+                            render_labor_card(
+                                labor_box,
+                                stage_name="Stage 1/5: Audio Extraction",
+                                pct=dl_pct,
                                 elapsed_str=elapsed_s,
-                                current_subtask=f"Downloading section: {start_t}s - {end_t}s",
-                                throughput="yt-dlp segment",
-                                mem_stat="Buffered"
+                                current_subtask="yt-dlp stream extraction",
+                                throughput="Fast m4a stream",
+                                mem_stat="Active"
                             )
                             push_log(line)
-                        download_video_section(raw_url, start_t, end_t, raw_seg, progress_callback=on_clip_dl)
-
-                        # Words in this timestamp
-                        seg_words = []
-                        for s in transcript.get("segments", []):
-                            for w in s.get("words", []):
-                                if start_t <= w["start"] <= end_t:
-                                    seg_words.append(w)
-
-                        # Generate .ass subtitles with center safe-zone karaoke
-                        ass_file = segments_dir / f"subs_{c_idx}.ass"
-                        push_log(f"Generating center safe-zone {style_key.upper()} subtitles (.ass)...")
-                        generate_karaoke_ass(seg_words, ass_file, clip_start_offset=start_t, style_preset=style_key)
-
-                        # Profanities for audio muting
-                        flagged = find_profanities_in_words(seg_words)
-                        if flagged:
-                            push_log(f"Masking {len(flagged)} profanity timestamp(s) with audio muting.")
-
-                        # Render with micro-pacing zooms + optional logo watermark
+    
+                        extract_audio_wav(raw_url, audio_wav, max_duration_sec=max_scan_sec, progress_callback=on_audio_extract_progress)
+                        push_log(f"Audio extracted successfully: {audio_wav.name}")
+    
+                        push_log("Initializing Faster-Whisper (int8 CPU)...")
+                        def on_whisper_progress(curr, total, snippet):
+                            pct = min(100, int((curr / max(1.0, total)) * 100)) if total > 0 else 0
+                            elapsed_str = format_elapsed(time.time() - t_start)
+                            render_labor_card(
+                                labor_box,
+                                stage_name="Stage 2/5: Voice Transcription",
+                                pct=pct,
+                                elapsed_str=elapsed_str,
+                                current_subtask=f'"{snippet[:28]}..."' if snippet else "Transcribing...",
+                                throughput=f"{format_elapsed(curr)} / {format_elapsed(total)}",
+                                mem_stat="int8 CPU"
+                            )
+                            push_log(f"Whisper: {snippet}")
+    
+                        transcript = transcribe_audio_whisper(audio_wav, transcript_json, progress_callback=on_whisper_progress)
+                        push_log("Transcription complete. Saved to 02_transcript.json")
+    
+                    # Checkpoint 03: Ollama Candidates Analysis (with Acoustic Peak Fusion)
+                    candidates_json = work_dir / "03_candidates.json"
+                    target_mode = "Mode B" if "Mode B" in mode else "Mode A"
+                    
+                    if not candidates_json.exists():
                         render_labor_card(
                             labor_box,
-                            stage_name=f"Stage 4/5: Rendering Clip {c_idx+1}/{len(candidates)}",
-                            pct=int(80 + (c_idx / max(1, len(candidates))) * 18),
+                            stage_name="Stage 3/5: AI Hook & Candidate Analysis",
+                            pct=65,
                             elapsed_str=format_elapsed(time.time() - t_start),
-                            current_subtask="FFmpeg 9:16 vertical crop + safe-zone captions",
-                            throughput="Micro-pacing zooms",
-                            mem_stat="2-Thread CPU"
+                            current_subtask=f"Ollama {MODEL_NAME} evaluation",
+                            throughput="Turbo analysis",
+                            mem_stat="Local LLM"
                         )
-                        push_log("FFmpeg rendering 9:16 vertical crop + micro-pacing zooms...")
-                        render_mode_a_short(
-                            source_video=raw_seg,
-                            ass_subtitles=ass_file,
-                            output_short_path=final_dest,
-                            flagged_profanities=flagged,
-                            split_layout=split_cam,
-                            facecam_position=cam_position.lower(),
-                            logo_path=active_logo_path
+                        push_log(f"Evaluating transcript with {MODEL_NAME} ({target_mode})...")
+                        analysis = extract_candidates_full(
+                            transcript,
+                            mode=target_mode,
+                            channel_name=active_credit,
+                            audio_path=audio_wav if audio_wav.exists() else None
                         )
-                        push_log(f"Rendered: {final_dest.name}")
-
-                else:
-                    # Mode B Transformative Compilation
-                    clips_info = analysis.get("clips", [])
-                    script = analysis.get("voiceover_script", "")
-                    comp_title = analysis.get("safe_title", "GTA6_Viral_Compilation")
-                    final_dest = READY_DIR / f"{comp_title}.mp4"
-
-                    if not final_dest.exists() or final_dest.stat().st_size < 102400:
-                        # Generate Piper Narration
-                        narration_wav = work_dir / "05_narration.wav"
-                        if not narration_wav.exists():
-                            push_log("Synthesizing energetic Ryan TTS voiceover via Piper...")
-                            generate_piper_tts(script, narration_wav)
-
-                        # Download micro-clips with live progress
-                        downloaded_clips = []
-                        for m_idx, clip in enumerate(clips_info):
-                            c_mp4 = segments_dir / f"micro_clip_{m_idx}.mp4"
-                            push_log(f"Downloading micro-highlight {m_idx+1}/3 ({clip['start']}s - {clip['end']}s)...")
-                            def on_mclip_dl(line: str):
+                        with open(candidates_json, "w", encoding="utf-8") as f:
+                            json.dump(analysis, f, indent=2)
+                        push_log("AI analysis complete. Selected candidate clips.")
+                    else:
+                        push_log("Reusing cached 03_candidates.json")
+                        with open(candidates_json, "r", encoding="utf-8") as f:
+                            analysis = json.load(f)
+    
+                    # Checkpoint 04 & Final Render
+                    segments_dir = work_dir / "04_segments"
+                    segments_dir.mkdir(parents=True, exist_ok=True)
+    
+                    if target_mode == "Mode A":
+                        candidates = analysis.get("candidates", [])
+                        style_key = "neon" if "Neon" in caption_style else ("clean" if "Clean" in caption_style else "karaoke")
+    
+                        for c_idx, cand in enumerate(candidates):
+                            start_t = cand["start"]
+                            end_t = cand["end"]
+                            safe_title = cand.get("safe_title", f"GTA6_Moment_{c_idx+1}")
+                            final_dest = READY_DIR / f"{safe_title}.mp4"
+    
+                            if final_dest.exists() and final_dest.stat().st_size > 102400:
+                                push_log(f"Short '{safe_title}' already exists.")
+                                continue
+    
+                            # Section download with live stdout
+                            raw_seg = segments_dir / f"seg_raw_{c_idx}.mp4"
+                            push_log(f"Downloading clip {c_idx+1}/{len(candidates)} ({start_t}s - {end_t}s)...")
+                            def on_clip_dl(line: str):
                                 elapsed_s = format_elapsed(time.time() - t_start)
                                 render_labor_card(
                                     labor_box,
-                                    stage_name=f"Stage 4/5: Downloading Highlight {m_idx+1}/3",
-                                    pct=75 + (m_idx * 5),
+                                    stage_name=f"Stage 4/5: Downloading Clip {c_idx+1}/{len(candidates)}",
+                                    pct=75,
                                     elapsed_str=elapsed_s,
-                                    current_subtask="yt-dlp micro-clip download",
-                                    throughput="Fast segment",
+                                    current_subtask=f"Downloading section: {start_t}s - {end_t}s",
+                                    throughput="yt-dlp segment",
                                     mem_stat="Buffered"
                                 )
                                 push_log(line)
-                            download_video_section(raw_url, clip["start"], clip["end"], c_mp4, progress_callback=on_mclip_dl)
-                            downloaded_clips.append(c_mp4)
-
-                        # Render Framed Template + Audio Ducking + optional logo watermark
+                            download_video_section(raw_url, start_t, end_t, raw_seg, progress_callback=on_clip_dl)
+    
+                            # Words in this timestamp
+                            seg_words = []
+                            for s in transcript.get("segments", []):
+                                for w in s.get("words", []):
+                                    if start_t <= w["start"] <= end_t:
+                                        seg_words.append(w)
+    
+                            # Generate .ass subtitles with center safe-zone karaoke
+                            ass_file = segments_dir / f"subs_{c_idx}.ass"
+                            push_log(f"Generating center safe-zone {style_key.upper()} subtitles (.ass)...")
+                            generate_karaoke_ass(seg_words, ass_file, clip_start_offset=start_t, style_preset=style_key)
+    
+                            # Profanities for audio muting
+                            flagged = find_profanities_in_words(seg_words)
+                            if flagged:
+                                push_log(f"Masking {len(flagged)} profanity timestamp(s) with audio muting.")
+    
+                            # Render with micro-pacing zooms + optional logo watermark
+                            render_labor_card(
+                                labor_box,
+                                stage_name=f"Stage 4/5: Rendering Clip {c_idx+1}/{len(candidates)}",
+                                pct=int(80 + (c_idx / max(1, len(candidates))) * 18),
+                                elapsed_str=format_elapsed(time.time() - t_start),
+                                current_subtask="FFmpeg 9:16 vertical crop + safe-zone captions",
+                                throughput="Micro-pacing zooms",
+                                mem_stat="2-Thread CPU"
+                            )
+                            push_log("FFmpeg rendering 9:16 vertical crop + micro-pacing zooms...")
+                            render_mode_a_short(
+                                source_video=raw_seg,
+                                ass_subtitles=ass_file,
+                                output_short_path=final_dest,
+                                flagged_profanities=flagged,
+                                split_layout=split_cam,
+                                facecam_position=cam_position.lower(),
+                                logo_path=active_logo_path
+                            )
+                            push_log(f"Rendered: {final_dest.name}")
+    
+                    else:
+                        # Mode B Transformative Compilation
+                        clips_info = analysis.get("clips", [])
+                        script = analysis.get("voiceover_script", "")
+                        comp_title = analysis.get("safe_title", "GTA6_Viral_Compilation")
+                        final_dest = READY_DIR / f"{comp_title}.mp4"
+    
+                        if not final_dest.exists() or final_dest.stat().st_size < 102400:
+                            # Generate Piper Narration
+                            narration_wav = work_dir / "05_narration.wav"
+                            if not narration_wav.exists():
+                                push_log("Synthesizing energetic Ryan TTS voiceover via Piper...")
+                                generate_piper_tts(script, narration_wav)
+    
+                            # Download micro-clips with live progress
+                            downloaded_clips = []
+                            for m_idx, clip in enumerate(clips_info):
+                                c_mp4 = segments_dir / f"micro_clip_{m_idx}.mp4"
+                                push_log(f"Downloading micro-highlight {m_idx+1}/3 ({clip['start']}s - {clip['end']}s)...")
+                                def on_mclip_dl(line: str):
+                                    elapsed_s = format_elapsed(time.time() - t_start)
+                                    render_labor_card(
+                                        labor_box,
+                                        stage_name=f"Stage 4/5: Downloading Highlight {m_idx+1}/3",
+                                        pct=75 + (m_idx * 5),
+                                        elapsed_str=elapsed_s,
+                                        current_subtask="yt-dlp micro-clip download",
+                                        throughput="Fast segment",
+                                        mem_stat="Buffered"
+                                    )
+                                    push_log(line)
+                                download_video_section(raw_url, clip["start"], clip["end"], c_mp4, progress_callback=on_mclip_dl)
+                                downloaded_clips.append(c_mp4)
+    
+                            # Render Framed Template + Audio Ducking + optional logo watermark
+                            render_labor_card(
+                                labor_box,
+                                stage_name="Stage 4/5: Assembling Branded Compilation",
+                                pct=92,
+                                elapsed_str=format_elapsed(time.time() - t_start),
+                                current_subtask="FFmpeg framing + audio ducking + badges",
+                                throughput="Micro-pacing zooms",
+                                mem_stat="2-Thread CPU"
+                            )
+                            push_log("FFmpeg rendering 9:16 branded template with audio ducking and credit badge...")
+                            render_mode_b_short(
+                                clip_videos=downloaded_clips,
+                                narration_audio=narration_wav,
+                                output_short_path=final_dest,
+                                hook_title=analysis.get("theme", "GTA 6 HIGHLIGHTS"),
+                                channel_credit=active_credit,
+                                logo_path=active_logo_path
+                            )
+                            push_log(f"Rendered: {final_dest.name}")
+                        else:
+                            push_log(f"Transformative Short '{comp_title}' already exists.")
+    
+                except ConnectionError as ce:
+                    st.session_state["pipeline_paused"] = True
+                    push_log(f"⚠️ PAUSED: Internet connection dropped ({ce}). Checkpoints safe.")
+                    render_labor_card(
+                        labor_box,
+                        stage_name="⏸️ Pipeline Paused: Internet Disconnected",
+                        pct=50,
+                        elapsed_str=format_elapsed(time.time() - t_start),
+                        current_subtask="Connection lost. Waiting for internet. Checkpoints saved.",
+                        throughput="0 kb/s (Paused)",
+                        mem_stat="Checkpoints Safe"
+                    )
+                    status_box.error("⏸️ Pipeline Paused: Internet disconnected. Reconnect network and click 'Resume / Try Again'.")
+                    break
+                except Exception as ex:
+                    err_str = str(ex)
+                    if "getaddrinfo failed" in err_str or "Failed to resolve" in err_str or not check_internet_connection():
+                        st.session_state["pipeline_paused"] = True
+                        push_log("⚠️ PAUSED: Internet disconnected. Checkpoints safe.")
                         render_labor_card(
                             labor_box,
-                            stage_name="Stage 4/5: Assembling Branded Compilation",
-                            pct=92,
+                            stage_name="⏸️ Pipeline Paused: Internet Disconnected",
+                            pct=50,
                             elapsed_str=format_elapsed(time.time() - t_start),
-                            current_subtask="FFmpeg framing + audio ducking + badges",
-                            throughput="Micro-pacing zooms",
-                            mem_stat="2-Thread CPU"
+                            current_subtask="Connection lost. Checkpoints saved.",
+                            throughput="0 kb/s (Paused)",
+                            mem_stat="Checkpoints Safe"
                         )
-                        push_log("FFmpeg rendering 9:16 branded template with audio ducking and credit badge...")
-                        render_mode_b_short(
-                            clip_videos=downloaded_clips,
-                            narration_audio=narration_wav,
-                            output_short_path=final_dest,
-                            hook_title=analysis.get("theme", "GTA 6 HIGHLIGHTS"),
-                            channel_credit=active_credit,
-                            logo_path=active_logo_path
-                        )
-                        push_log(f"Rendered: {final_dest.name}")
+                        status_box.error("⏸️ Pipeline Paused: Internet disconnected. Click 'Resume / Try Again' once reconnected.")
                     else:
-                        push_log(f"Transformative Short '{comp_title}' already exists.")
+                        push_log(f"ERROR: {err_str}")
+                        status_box.error(f"Error: {err_str}")
+                    break
 
             render_labor_card(
                 labor_box,

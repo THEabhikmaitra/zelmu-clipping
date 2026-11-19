@@ -144,16 +144,29 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     return output_ass_path
 
+def check_internet_connection(timeout: float = 2.5) -> bool:
+    """Probes reliable DNS/HTTPS endpoints to verify internet status."""
+    import socket
+    for host in ("1.1.1.1", "8.8.8.8", "www.youtube.com"):
+        try:
+            socket.create_connection((host, 53 if host in ("1.1.1.1", "8.8.8.8") else 443), timeout=timeout)
+            return True
+        except (OSError, socket.timeout):
+            continue
+    return False
+
+
 def download_video_section(
     url: str,
     start_sec: float,
     end_sec: float,
     output_mp4_path: Path,
-    progress_callback: Optional[Any] = None
+    progress_callback: Optional[Any] = None,
+    max_retries: int = 3
 ) -> Path:
     """
     Downloads only the approved timestamp section via yt-dlp --download-sections.
-    Never downloads full video file upfront.
+    Includes auto-retry and connection checking on network drops.
     """
     output_mp4_path = output_mp4_path.resolve()
     output_mp4_path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,32 +193,57 @@ def download_video_section(
         url
     ]
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-    if proc.stdout:
-        for line in iter(proc.stdout.readline, ""):
-            line_s = line.strip()
-            if line_s and progress_callback:
-                progress_callback(line_s)
-    proc.wait()
+    for attempt in range(1, max_retries + 1):
+        logs = []
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        if proc.stdout:
+            for line in iter(proc.stdout.readline, ""):
+                line_s = line.strip()
+                if line_s:
+                    logs.append(line_s)
+                    if progress_callback:
+                        progress_callback(line_s)
+        proc.wait()
 
-    # Check if file exists with mp4 or mkv
-    if not output_mp4_path.exists():
-        possible = list(output_mp4_path.parent.glob(f"{output_mp4_path.stem}.*"))
-        if possible:
-            # Rename or use first match
-            if possible[0].suffix.lower() != ".mp4":
-                # Convert to mp4 via ffmpeg
-                ffmpeg_exe = str(ffmpeg_bin or "ffmpeg")
-                conv_cmd = [
-                    ffmpeg_exe, "-y", "-i", str(possible[0]),
-                    "-c", "copy", str(output_mp4_path)
-                ]
-                subprocess.run(conv_cmd, capture_output=True)
+        # Check if file exists with mp4 or mkv
+        if not output_mp4_path.exists():
+            possible = list(output_mp4_path.parent.glob(f"{output_mp4_path.stem}.*"))
+            if possible:
+                if possible[0].suffix.lower() != ".mp4":
+                    ffmpeg_exe = str(ffmpeg_bin or "ffmpeg")
+                    conv_cmd = [
+                        ffmpeg_exe, "-y", "-i", str(possible[0]),
+                        "-c", "copy", str(output_mp4_path)
+                    ]
+                    subprocess.run(conv_cmd, capture_output=True)
+                else:
+                    possible[0].rename(output_mp4_path)
+
+        if output_mp4_path.exists() and output_mp4_path.stat().st_size > 102400:
+            return output_mp4_path
+
+        # If download failed, inspect error
+        err_text = "\n".join(logs[-10:]) if logs else "No process output."
+        is_net_error = any(
+            "getaddrinfo failed" in l or "Failed to resolve" in l or "Connection" in l or "network" in l.lower()
+            for l in logs
+        )
+
+        if is_net_error or not check_internet_connection():
+            if attempt < max_retries:
+                if progress_callback:
+                    progress_callback(f"⚠️ Network drop detected. Retrying ({attempt}/{max_retries})...")
+                import time
+                for _ in range(5):
+                    if check_internet_connection():
+                        break
+                    time.sleep(1)
+                continue
             else:
-                possible[0].rename(output_mp4_path)
+                raise ConnectionError(f"Internet connection lost: {err_text}")
 
-    if not output_mp4_path.exists():
-        raise RuntimeError(f"Section download failed: {res.stderr}\n{res.stdout}")
+        if attempt == max_retries:
+            raise RuntimeError(f"Section download failed: {err_text}")
 
     return output_mp4_path
 
