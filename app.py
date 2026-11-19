@@ -971,19 +971,27 @@ with tab1:
                         completed_shorts = 0
                         with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as pool:
                             future_map = {pool.submit(process_mode_a_candidate, c_idx, cand): c_idx for c_idx, cand in enumerate(candidates)}
-                            for fut in concurrent.futures.as_completed(future_map):
-                                completed_shorts += 1
-                                res_file = fut.result()
-                                pct_val = int(75 + (completed_shorts / max(1, len(candidates))) * 23)
+                            while any(not fut.done() for fut in future_map):
+                                time.sleep(1)
+                                done_count = sum(1 for fut in future_map if fut.done())
+                                pct_val = int(75 + (done_count / max(1, len(candidates))) * 23)
                                 render_labor_card(
                                     labor_box,
-                                    stage_name=f"Stage 4/5: Rendering ({completed_shorts}/{len(candidates)} Finished)",
+                                    stage_name=f"Stage 4/5: Parallel Rendering ({done_count}/{len(candidates)} Finished)",
                                     pct=pct_val,
                                     elapsed_str=format_elapsed(time.time() - t_start),
-                                    current_subtask=f"Finished {res_file.name}",
-                                    throughput="Fast encode",
-                                    mem_stat="Active"
+                                    current_subtask=f"Encoding {len(candidates)} shorts (Intel QSV + YOLOX)...",
+                                    throughput="Multi-worker active",
+                                    mem_stat="Encoding"
                                 )
+                                with log_lock:
+                                    try:
+                                        detail_box.code("\n".join(full_logs), language="bash")
+                                    except Exception:
+                                        pass
+
+                            for fut in future_map:
+                                fut.result()
 
                     else:
                         # Mode B Transformative Compilation
