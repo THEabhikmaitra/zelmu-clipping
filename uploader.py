@@ -254,17 +254,25 @@ def get_channel_analytics(creds: Optional[Credentials] = None) -> Dict[str, Any]
         return {"error": str(e)}
 
 
-def calculate_monetization_schedule_slots(count: int) -> List[str]:
+def calculate_monetization_schedule_slots(count: int, slots_per_day: int = 6) -> List[str]:
     """
-    Generates RFC 3339 timestamps for Tier-1 High-CPM windows (15:00, 18:00, 21:00 UTC).
-    Spaced 3-4 hours apart during peak US/UK evening viewing.
+    Generates RFC 3339 timestamps for Tier-1 High-CPM windows spanning across days.
+    Supports scheduling 100s of Shorts into future daily release slots automatically.
     """
     import datetime
     slots = []
     now = datetime.datetime.now(datetime.timezone.utc)
-    target_hours = [15, 18, 21]  # 10am EST, 1pm EST, 4pm EST (Tier-1 Peak)
+
+    if slots_per_day == 3:
+        target_hours = [15, 18, 21]  # 3/day (10am, 1pm, 4pm EST)
+    elif slots_per_day == 12:
+        target_hours = [8, 10, 12, 14, 16, 17, 18, 19, 20, 21, 22, 23]  # 12/day hyper-frequency
+    else:
+        # Default 6/day (every 2-3 hours during active US/UK windows)
+        target_hours = [10, 13, 15, 18, 20, 22]
+
     current_day = now.date()
-    if now.hour >= 20:
+    if now.hour >= target_hours[-1]:
         current_day = current_day + datetime.timedelta(days=1)
 
     day_offset = 0
@@ -272,7 +280,7 @@ def calculate_monetization_schedule_slots(count: int) -> List[str]:
         d = current_day + datetime.timedelta(days=day_offset)
         for h in target_hours:
             candidate_dt = datetime.datetime(d.year, d.month, d.day, h, 0, 0, tzinfo=datetime.timezone.utc)
-            if candidate_dt > now + datetime.timedelta(hours=1):
+            if candidate_dt > now + datetime.timedelta(minutes=45):
                 slots.append(candidate_dt.strftime("%Y-%m-%dT%H:%M:%SZ"))
                 if len(slots) == count:
                     break
@@ -382,15 +390,16 @@ def upload_single_video(
 
 
 def upload_batch_private(
-    max_batch_size: int = 25,
+    max_batch_size: int = 150,
     auto_schedule: bool = False,
+    slots_per_day: int = 6,
     progress_callback=None,
     chunk_callback=None
 ) -> List[Dict[str, Any]]:
     """
-    Uploads up to 25 videos from ./ready_to_upload/ to YouTube as Private.
-    If auto_schedule=True, spaces releases 3-4 hours apart during peak Tier-1 monetization windows (15:00, 18:00, 21:00 UTC).
-    Strictly caps at 25 videos to protect channel health.
+    Uploads up to max_batch_size videos from ./ready_to_upload/ to YouTube as Private/Scheduled.
+    If auto_schedule=True, spreads 100s of Shorts across daily peak High-CPM slots into the future.
+    Safely captures quota limits without losing un-uploaded video files.
     """
     READY_DIR.mkdir(parents=True, exist_ok=True)
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
@@ -402,7 +411,7 @@ def upload_batch_private(
     batch = video_files[:max_batch_size]
     youtube = get_authenticated_service()
 
-    slots = calculate_monetization_schedule_slots(len(batch)) if auto_schedule else [None] * len(batch)
+    slots = calculate_monetization_schedule_slots(len(batch), slots_per_day=slots_per_day) if auto_schedule else [None] * len(batch)
 
     results = []
     total = len(batch)
@@ -416,15 +425,26 @@ def upload_batch_private(
             if chunk_callback:
                 chunk_callback(idx + 1, total, video_path.name, pct)
 
-        res = upload_single_video(
-            youtube,
-            video_path,
-            title=title_raw,
-            publish_at=pub_time,
-            chunk_callback=on_single_chunk
-        )
-        if pub_time:
-            res["publish_at"] = pub_time
-        results.append(res)
+        try:
+            res = upload_single_video(
+                youtube,
+                video_path,
+                title=title_raw,
+                publish_at=pub_time,
+                chunk_callback=on_single_chunk
+            )
+            if pub_time:
+                res["publish_at"] = pub_time
+            results.append(res)
+        except Exception as e:
+            err_msg = str(e)
+            if "quotaExceeded" in err_msg or "uploadLimitExceeded" in err_msg:
+                results.append({
+                    "error": f"Daily YouTube upload quota reached at clip #{idx+1}. Remaining {total - idx} clips safely saved in ready_to_upload/ for tomorrow.",
+                    "video_id": None
+                })
+                break
+            else:
+                raise
 
     return results

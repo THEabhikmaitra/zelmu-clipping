@@ -1250,16 +1250,32 @@ with tab2:
                 st.error(f"Error generating auth URL: {e}")
 
     # Monetization & Scheduling Options
-    auto_sched = st.checkbox(
-        "🎯 Auto-Schedule for Peak Tier-1 High-CPM Monetization (15:00, 18:00, 21:00 UTC / 10am, 1pm, 4pm EST)",
-        value=True,
-        help="Spaces releases 3-4 hours apart during peak US & UK gaming hours to maximize High-CPM viewer retention without cannibalizing your 5.7k subscriber base."
-    )
+    col_sc1, col_sc2 = st.columns([1, 1])
+    with col_sc1:
+        auto_sched = st.checkbox(
+            "🎯 Auto-Schedule High-CPM Daily Slots",
+            value=True,
+            help="Spaces 100s of Shorts across daily peak US/UK gaming hours to maximize CPM & retention."
+        )
+    with col_sc2:
+        cadence_option = st.selectbox(
+            "Daily Cadence",
+            options=["6 Shorts / Day (High Frequency)", "3 Shorts / Day (Conservative Peak)", "12 Shorts / Day (Hyper-growth)"],
+            index=0
+        )
+        slots_per_day = 6 if "6" in cadence_option else (12 if "12" in cadence_option else 3)
+
+    batch_cap = st.slider("Max Upload Queue Limit", min_value=5, max_value=250, value=min(100, max(5, len(ready_videos))), step=5)
+
+    if auto_sched and ready_videos:
+        q_count = min(len(ready_videos), batch_cap)
+        days_span = max(1, (q_count + slots_per_day - 1) // slots_per_day)
+        st.caption(f"🗓️ **Calendar Schedule:** `{q_count}` Shorts will be scheduled across **{days_span} days** (~{slots_per_day}/day during peak US/UK hours).")
 
     # Upload Action Button
     upload_disabled = len(ready_videos) == 0 or not yt_connected
     upload_btn = st.button(
-        "Upload to YouTube (Scheduled)" if auto_sched else "Upload to YouTube (Private Draft)",
+        f"Upload & Schedule {min(len(ready_videos), batch_cap)} Shorts to YouTube" if auto_sched else f"Upload {min(len(ready_videos), batch_cap)} Shorts to YouTube (Private)",
         type="primary",
         disabled=upload_disabled,
         use_container_width=True,
@@ -1281,8 +1297,9 @@ with tab2:
 
         try:
             results = upload_batch_private(
-                max_batch_size=25,
+                max_batch_size=batch_cap,
                 auto_schedule=auto_sched,
+                slots_per_day=slots_per_day,
                 progress_callback=update_ui,
                 chunk_callback=update_chunk
             )
