@@ -18,11 +18,11 @@ def get_best_video_encoder() -> List[str]:
 
     ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
     try:
-        res_qsv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_qsv", "-f", "null", "-"], capture_output=True, timeout=2)
+        res_qsv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_qsv", "-f", "null", "-"], capture_output=True, timeout=6)
         if res_qsv.returncode == 0:
             _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23"]
             return _BEST_ENCODER_CACHE
-        res_nv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, timeout=2)
+        res_nv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, timeout=6)
         if res_nv.returncode == 0:
             _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]
             return _BEST_ENCODER_CACHE
@@ -323,8 +323,7 @@ def render_mode_a_short(
         )
     elif not split_layout:
         base_filter = (
-            f"[0:v]crop='if(between(mod(t,7),3.5,7), in_h*9/16/1.08, in_h*9/16)':'if(between(mod(t,7),3.5,7), in_h/1.08, in_h)':"
-            f"'(in_w-out_w)/2':'(in_h-out_h)/2',"
+            f"[0:v]crop=in_h*9/16:in_h:(in_w-in_h*9/16)/2:0,"
             f"scale=1080:1920,"
             f"subtitles='{esc_sub}'"
         )

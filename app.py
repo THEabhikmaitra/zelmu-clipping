@@ -953,7 +953,8 @@ with tab1:
                             if flagged:
                                 push_log(f"[Parallel Worker #{c_idx+1}] Masking {len(flagged)} profanity timestamp(s).")
 
-                            push_log(f"[Parallel Worker #{c_idx+1}] Rendering short (Intel QSV + dynamic tracking)...")
+                            render_mode_desc = "Intel QSV + dynamic tracking" if enable_yolox else "Intel QSV center crop"
+                            push_log(f"[Parallel Worker #{c_idx+1}] Rendering short ({render_mode_desc})...")
                             render_mode_a_short(
                                 source_video=raw_seg,
                                 ass_subtitles=ass_file,
