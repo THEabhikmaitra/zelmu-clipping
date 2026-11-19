@@ -8,6 +8,29 @@ from typing import List, Dict, Any, Optional
 from safety import mask_text, build_audio_mute_filter, find_profanities_in_words
 from transcriber import get_ffmpeg_path, get_ytdlp_cmd
 
+_BEST_ENCODER_CACHE = None
+
+def get_best_video_encoder() -> List[str]:
+    """Detects fastest available hardware encoder (Intel QSV > NVENC > CPU ultrafast)."""
+    global _BEST_ENCODER_CACHE
+    if _BEST_ENCODER_CACHE is not None:
+        return _BEST_ENCODER_CACHE
+
+    ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
+    try:
+        res_qsv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_qsv", "-f", "null", "-"], capture_output=True, timeout=2)
+        if res_qsv.returncode == 0:
+            _BEST_ENCODER_CACHE = ["-c:v", "h264_qsv", "-global_quality", "23"]
+            return _BEST_ENCODER_CACHE
+        res_nv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, timeout=2)
+        if res_nv.returncode == 0:
+            _BEST_ENCODER_CACHE = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]
+            return _BEST_ENCODER_CACHE
+    except Exception:
+        pass
+    _BEST_ENCODER_CACHE = ["-c:v", "libx264", "-preset", "ultrafast", "-threads", "0", "-crf", "23"]
+    return _BEST_ENCODER_CACHE
+
 def escape_ffmpeg_path(path: Path) -> str:
     r"""
     Windows path escaping for FFmpeg filters (subtitles=, fontfile=).
@@ -285,10 +308,7 @@ def render_mode_a_short(
         *vf_args,
         *map_args,
         *audio_args,
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-threads", "2",
-        "-crf", "23",
+        *get_best_video_encoder(),
         "-c:a", "aac",
         "-b:a", "128k",
         str(output_short_path)
@@ -391,7 +411,7 @@ def render_mode_b_short(
             "[a_game][a_narr]amix=inputs=2:duration=first:dropout_transition=2[a_out]"
         )
         map_args = ["-map", "[v_out]", "-map", "[a_out]"]
-        c_v_args = ["-c:v", "libx264", "-preset", "veryfast", "-threads", "2", "-crf", "23"]
+        c_v_args = get_best_video_encoder()
     else:
         fc = (
             "[0:a]volume=0.20[a_game];[1:a]volume=1.00[a_narr];"

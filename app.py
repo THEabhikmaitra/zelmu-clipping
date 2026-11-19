@@ -731,11 +731,43 @@ with tab1:
                 
                 push_log(f"Channel: {detected_handle} | Video ID: {vid_id}")
 
-                # Checkpoint 01: Audio Extraction (yt-dlp 16kHz mono WAV)
+                # Checkpoint 01: Instant YouTube Word-Timed Captions (Zero-Audio Fast Path)
+                transcript_json = work_dir / "02_transcript.json"
+                transcript = None
+                if transcript_json.exists() and transcript_json.stat().st_size > 100:
+                    push_log("Reusing cached 02_transcript.json")
+                    with open(transcript_json, "r", encoding="utf-8") as f:
+                        transcript = json.load(f)
+
+                if not transcript:
+                    push_log("Checking for instant YouTube word-timed captions (Fast Path)...")
+                    render_labor_card(
+                        labor_box,
+                        stage_name="Stage 1/5: Word-Timed Captions (⚡ Fast Path)",
+                        pct=25,
+                        elapsed_str=format_elapsed(time.time() - t_start),
+                        current_subtask="Querying YouTube json3 subtitles...",
+                        throughput="Direct API fetch",
+                        mem_stat="Zero CPU"
+                    )
+                    transcript = fetch_youtube_captions(raw_url, transcript_json, max_duration_sec=max_scan_sec)
+                    if transcript:
+                        elapsed_str = format_elapsed(time.time() - t_start)
+                        render_labor_card(
+                            labor_box,
+                            stage_name="Stage 1/5: Word-Timed Captions (⚡ Instant YT)",
+                            pct=100,
+                            elapsed_str=elapsed_str,
+                            current_subtask="YouTube json3 word-level subtitles",
+                            throughput="Zero CPU / Instant",
+                            mem_stat="Fast Path"
+                        )
+                        push_log(f"⚡ Instant YouTube word-timed captions parsed ({len(transcript.get('segments', []))} segments). Skipping 15m audio download!")
+
+                # Checkpoint 02: Fallback Audio Extraction + Faster-Whisper (ONLY if YouTube captions were absent)
                 audio_wav = work_dir / "01_audio.wav"
-                if not audio_wav.exists() or audio_wav.stat().st_size < 1024:
-                    push_log("Starting audio-first stream extraction via yt-dlp...")
-                    
+                if not transcript:
+                    push_log("YouTube captions unavailable. Fast extracting audio for Whisper...")
                     def on_audio_extract_progress(line: str):
                         elapsed_s = format_elapsed(time.time() - t_start)
                         dl_pct = 20
@@ -748,55 +780,31 @@ with tab1:
                             pct=dl_pct,
                             elapsed_str=elapsed_s,
                             current_subtask="yt-dlp stream extraction",
-                            throughput="16kHz mono WAV",
+                            throughput="Fast m4a stream",
                             mem_stat="Active"
                         )
                         push_log(line)
 
                     extract_audio_wav(raw_url, audio_wav, max_duration_sec=max_scan_sec, progress_callback=on_audio_extract_progress)
                     push_log(f"Audio extracted successfully: {audio_wav.name}")
-                else:
-                    push_log("Reusing cached 01_audio.wav")
 
-                # Checkpoint 02: Instant YouTube Captions or Faster-Whisper Fallback
-                transcript_json = work_dir / "02_transcript.json"
-                if not transcript_json.exists():
-                    push_log("Checking for YouTube word-timed captions (Fast Mode)...")
-                    transcript = fetch_youtube_captions(raw_url, transcript_json, max_duration_sec=max_scan_sec)
-                    if transcript:
+                    push_log("Initializing Faster-Whisper (int8 CPU)...")
+                    def on_whisper_progress(curr, total, snippet):
+                        pct = min(100, int((curr / max(1.0, total)) * 100)) if total > 0 else 0
                         elapsed_str = format_elapsed(time.time() - t_start)
                         render_labor_card(
                             labor_box,
-                            stage_name="Stage 2/5: Word-Timed Captions (⚡ Instant YT)",
-                            pct=100,
+                            stage_name="Stage 2/5: Voice Transcription",
+                            pct=pct,
                             elapsed_str=elapsed_str,
-                            current_subtask="YouTube json3 word-level subtitles",
-                            throughput="Zero CPU / ~1s",
-                            mem_stat="Fast Mode"
+                            current_subtask=f'"{snippet[:28]}..."' if snippet else "Transcribing...",
+                            throughput=f"{format_elapsed(curr)} / {format_elapsed(total)}",
+                            mem_stat="int8 CPU"
                         )
-                        push_log(f"⚡ Instant YouTube word-timed captions parsed ({len(transcript.get('segments', []))} segments)")
-                    else:
-                        push_log("YouTube captions unavailable. Initializing Faster-Whisper (int8 CPU)...")
-                        def on_whisper_progress(curr, total, snippet):
-                            pct = min(100, int((curr / max(1.0, total)) * 100)) if total > 0 else 0
-                            elapsed_str = format_elapsed(time.time() - t_start)
-                            render_labor_card(
-                                labor_box,
-                                stage_name="Stage 2/5: Voice Transcription",
-                                pct=pct,
-                                elapsed_str=elapsed_str,
-                                current_subtask=f'"{snippet[:28]}..."' if snippet else "Transcribing...",
-                                throughput=f"{format_elapsed(curr)} / {format_elapsed(total)}",
-                                mem_stat="int8 CPU"
-                            )
-                            push_log(f"Whisper: {snippet}")
+                        push_log(f"Whisper: {snippet}")
 
-                        transcript = transcribe_audio_whisper(audio_wav, transcript_json, progress_callback=on_whisper_progress)
-                        push_log("Transcription complete. Saved to 02_transcript.json")
-                else:
-                    push_log("Reusing cached 02_transcript.json")
-                    with open(transcript_json, "r", encoding="utf-8") as f:
-                        transcript = json.load(f)
+                    transcript = transcribe_audio_whisper(audio_wav, transcript_json, progress_callback=on_whisper_progress)
+                    push_log("Transcription complete. Saved to 02_transcript.json")
 
                 # Checkpoint 03: Ollama Candidates Analysis (with Acoustic Peak Fusion)
                 candidates_json = work_dir / "03_candidates.json"
@@ -805,18 +813,23 @@ with tab1:
                 if not candidates_json.exists():
                     render_labor_card(
                         labor_box,
-                        stage_name="Stage 3/5: AI Hook & Acoustic Spike Analysis",
+                        stage_name="Stage 3/5: AI Hook & Candidate Analysis",
                         pct=65,
                         elapsed_str=format_elapsed(time.time() - t_start),
-                        current_subtask=f"Ollama {MODEL_NAME} + 2-4kHz audio energy analysis",
-                        throughput="Acoustic peak fusion",
+                        current_subtask=f"Ollama {MODEL_NAME} evaluation",
+                        throughput="Turbo analysis",
                         mem_stat="Local LLM"
                     )
-                    push_log(f"Scanning acoustic energy spikes & evaluating transcript with {MODEL_NAME} ({target_mode})...")
-                    analysis = extract_candidates_full(transcript, mode=target_mode, channel_name=active_credit, audio_path=audio_wav)
+                    push_log(f"Evaluating transcript with {MODEL_NAME} ({target_mode})...")
+                    analysis = extract_candidates_full(
+                        transcript,
+                        mode=target_mode,
+                        channel_name=active_credit,
+                        audio_path=audio_wav if audio_wav.exists() else None
+                    )
                     with open(candidates_json, "w", encoding="utf-8") as f:
                         json.dump(analysis, f, indent=2)
-                    push_log("AI & acoustic analysis complete. Selected candidate clips.")
+                    push_log("AI analysis complete. Selected candidate clips.")
                 else:
                     push_log("Reusing cached 03_candidates.json")
                     with open(candidates_json, "r", encoding="utf-8") as f:
