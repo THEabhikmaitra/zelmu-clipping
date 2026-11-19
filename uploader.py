@@ -67,8 +67,11 @@ def get_authenticated_service():
     return build("youtube", "v3", credentials=creds)
 
 
+VERIFIER_FILE = Path(".code_verifier")
+
+
 def get_auth_url(redirect_uri: str = DEFAULT_REDIRECT_URI) -> str:
-    """Generates direct Google OAuth consent URL."""
+    """Generates direct Google OAuth consent URL and persists code_verifier for PKCE."""
     if not CLIENT_SECRETS_FILE.exists():
         raise FileNotFoundError(f"'{CLIENT_SECRETS_FILE}' not found.")
     flow = InstalledAppFlow.from_client_secrets_file(
@@ -77,12 +80,16 @@ def get_auth_url(redirect_uri: str = DEFAULT_REDIRECT_URI) -> str:
         redirect_uri=redirect_uri
     )
     auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
+    if getattr(flow, "code_verifier", None):
+        with open(VERIFIER_FILE, "w", encoding="utf-8") as vf:
+            vf.write(flow.code_verifier)
     return auth_url
 
 
 def exchange_code_for_token(code_or_url: str, redirect_uri: str = DEFAULT_REDIRECT_URI) -> Credentials:
     """
     Exchanges authorization code (or full redirected callback URL) for tokens and saves token.json.
+    Restores code_verifier for PKCE.
     """
     if not CLIENT_SECRETS_FILE.exists():
         raise FileNotFoundError(f"'{CLIENT_SECRETS_FILE}' not found.")
@@ -100,10 +107,31 @@ def exchange_code_for_token(code_or_url: str, redirect_uri: str = DEFAULT_REDIRE
         scopes=SCOPES,
         redirect_uri=redirect_uri
     )
-    flow.fetch_token(code=code)
+
+    verifier = None
+    if VERIFIER_FILE.exists():
+        try:
+            with open(VERIFIER_FILE, "r", encoding="utf-8") as vf:
+                verifier = vf.read().strip()
+        except Exception:
+            verifier = None
+
+    if verifier:
+        flow.code_verifier = verifier
+        flow.fetch_token(code=code, code_verifier=verifier)
+    else:
+        flow.fetch_token(code=code)
+
     creds = flow.credentials
     with open(TOKEN_FILE, "w", encoding="utf-8") as f:
         f.write(creds.to_json())
+
+    if VERIFIER_FILE.exists():
+        try:
+            VERIFIER_FILE.unlink()
+        except Exception:
+            pass
+
     return creds
 
 
