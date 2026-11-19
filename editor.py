@@ -34,20 +34,27 @@ def generate_karaoke_ass(
     words: List[Dict[str, Any]],
     output_ass_path: Path,
     clip_start_offset: float = 0.0,
-    max_words_per_line: int = 3
+    max_words_per_line: int = 3,
+    style_preset: str = "neon"
 ) -> Path:
     """
     Generates styled .ass subtitle file with Center Safe-Zone Karaoke Captions.
     - 1080x1920 resolution.
     - Alignment=2 (bottom-center), MarginV=520 (center safe zone clear of YouTube UI).
-    - Bold Arial Black font, high-contrast white with bright yellow (&H0000FFFF) active word.
-    - Thick black outline (&H00000000).
+    - Styles: 'neon' (GTA Vice Neon pink/cyan), 'karaoke' (Gold/Yellow), 'clean' (High-contrast White).
     - Max 3 words per line, profanities masked (f***).
     """
     output_ass_path = output_ass_path.resolve()
     output_ass_path.parent.mkdir(parents=True, exist_ok=True)
 
-    header = """[Script Info]
+    if style_preset == "neon":
+        style_line = "Style: Default,Arial Black,74,&H00FFFF00,&H00D414E0,&H004B0082,&H99000000,-1,0,0,0,100,100,0,0,1,6,3,2,40,40,520,1"
+    elif style_preset == "clean":
+        style_line = "Style: Default,Arial Black,68,&H00FFFFFF,&H00FFFFFF,&H00181818,&H99000000,-1,0,0,0,100,100,0,0,1,5,1,2,40,40,520,1"
+    else:  # classic karaoke
+        style_line = "Style: Default,Arial Black,72,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,2,2,40,40,520,1"
+
+    header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
 PlayResY: 1920
@@ -55,7 +62,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial Black,72,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,2,2,40,40,520,1
+{style_line}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -215,6 +222,7 @@ def render_mode_a_short(
     output_short_path: Path,
     flagged_profanities: List[Dict[str, Any]],
     split_layout: bool = False,
+    facecam_position: str = "top-left",
     logo_path: Optional[Path] = None
 ) -> Path:
     """
@@ -242,9 +250,16 @@ def render_mode_a_short(
             f"subtitles='{esc_sub}'"
         )
     else:
+        cam_coords = {
+            "top-left": "0:0",
+            "top-right": "in_w*0.65:0",
+            "bottom-left": "0:in_h*0.55",
+            "bottom-right": "in_w*0.65:in_h*0.55"
+        }
+        cam_xy = cam_coords.get(facecam_position.lower(), "0:0")
         base_filter = (
             f"[0:v]split=2[cam][game];"
-            f"[cam]crop=in_w*0.35:in_h*0.45:0:0,scale=1080:672[top];"
+            f"[cam]crop=in_w*0.35:in_h*0.45:{cam_xy},scale=1080:672[top];"
             f"[game]crop=in_h*9/16:in_h:(in_w-in_h*9/16)/2:0,scale=1080:1248[bot];"
             f"[top][bot]vstack=inputs=2,"
             f"subtitles='{esc_sub}'"

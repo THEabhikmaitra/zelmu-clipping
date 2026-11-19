@@ -1,6 +1,8 @@
 import json
 import time
+import subprocess
 import requests
+import numpy as np
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from safety import sanitize_filename, ADULT_MONETIZATION_RISK_KEYWORDS
@@ -193,34 +195,157 @@ OUTPUT FORMAT: Return valid JSON ONLY:
     result["safe_title"] = sanitize_filename(result.get("title", "GTA_6_Transformative_Short"))
     return result
 
+def calculate_audio_spikes(
+    audio_path: Path,
+    max_duration_sec: Optional[float] = None
+) -> List[Dict[str, Any]]:
+    """
+    Analyzes audio energy spikes (NeonClipping acoustic algorithm):
+    - 8kHz mono FFmpeg stream.
+    - RMS loudness jumps vs 2-minute rolling baseline.
+    - 2-4 kHz spectral band energy (screams, shouts, explosive gunshots).
+    - Returns top scored seconds: [{'time': float, 'score': float, 'loud': float, 'shout': float}].
+    """
+    audio_path = Path(audio_path).resolve()
+    if not audio_path.exists():
+        return []
+
+    from transcriber import get_ffmpeg_path
+    ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
+
+    cmd = [
+        ffmpeg_bin, "-v", "error",
+        "-i", str(audio_path),
+        "-vn", "-ac", "1", "-ar", "8000",
+        "-f", "s16le", "pipe:1"
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=60)
+        raw = proc.stdout
+    except Exception:
+        return []
+
+    x = np.frombuffer(raw[:len(raw) // 2 * 2], np.int16).astype(np.float32) / 32768.0
+    n = len(x) // 8000
+    if n == 0:
+        return []
+
+    if max_duration_sec and n > int(max_duration_sec):
+        n = int(max_duration_sec)
+        x = x[:n * 8000]
+
+    x = x[:n * 8000].reshape(n, 8000)
+    rms = np.sqrt((x ** 2).mean(axis=1))
+    spec = np.abs(np.fft.rfft(x * np.hanning(8000), axis=1)) ** 2
+    hf = spec[:, 2000:4000].sum(axis=1) / (spec.sum(axis=1) + 1e-9)
+
+    def _z(arr: np.ndarray, win: int = 120) -> np.ndarray:
+        if len(arr) == 0:
+            return np.zeros(0)
+        win = max(1, min(win, len(arr)))
+        k = np.ones(win) / win
+        mu = np.convolve(arr, k, "same")
+        sd = np.sqrt(np.maximum(np.convolve(arr ** 2, k, "same") - mu ** 2, 0)) + 1e-6
+        return np.clip((arr - mu) / sd / 3.5, 0.0, 1.0)
+
+    loud = _z(rms)
+    shout = np.clip(_z(hf * rms), 0.0, 1.0)
+    score = 0.55 * loud + 0.45 * shout
+
+    top_indices = np.argsort(score)[::-1]
+    spikes = []
+    for idx in top_indices:
+        t_sec = float(idx)
+        if any(abs(t_sec - s["time"]) < 30.0 for s in spikes):
+            continue
+        if score[idx] > 0.20:
+            spikes.append({
+                "time": t_sec,
+                "score": round(float(score[idx]), 3),
+                "loud": round(float(loud[idx]), 3),
+                "shout": round(float(shout[idx]), 3)
+            })
+        if len(spikes) >= 8:
+            break
+
+    return spikes
+
 def extract_candidates_full(
     transcript: Dict[str, Any],
     mode: str = "Mode A",
-    channel_name: str = "Creator"
+    channel_name: str = "Creator",
+    audio_path: Optional[Path] = None
 ) -> Dict[str, Any]:
     """
     Main entry point for candidate analysis across chunks.
+    Blends Ollama LLM semantic scoring with NeonClipping acoustic energy spikes.
     """
     if mode == "Mode B":
         return analyze_mode_b_compilation(transcript, channel_name)
 
-    # Mode A: Process in 8-minute chunks
+    # 1. Compute acoustic spikes (shouting, loud explosions, high excitement)
+    spikes = []
+    if audio_path and Path(audio_path).exists():
+        try:
+            spikes = calculate_audio_spikes(Path(audio_path))
+        except Exception:
+            spikes = []
+
+    # 2. Mode A: Process in 8-minute chunks
     chunks = split_transcript_into_chunks(transcript, chunk_duration_sec=480.0, overlap_sec=30.0)
     all_candidates = []
     
     for i, chunk in enumerate(chunks):
         cands = analyze_mode_a_chunk(chunk)
         all_candidates.extend(cands)
-        if len(all_candidates) >= 5:  # Sufficient candidates collected
+        if len(all_candidates) >= 5:
             break
 
-    # If no candidates met strict criteria, fallback to top word-dense window
+    # 3. Acoustic peak fusion fallback: if LLM returned insufficient candidates, snap windows to audio spikes
+    if len(all_candidates) < 3 and spikes:
+        segments = transcript.get("segments", [])
+        for spk in spikes:
+            peak_t = spk["time"]
+            # Check if this peak is already covered by existing candidates
+            if any(c["start"] <= peak_t <= c["end"] for c in all_candidates):
+                continue
+            
+            # Snap 28-36s window around peak to sentence boundaries
+            win_start = max(0.0, peak_t - 12.0)
+            win_end = win_start + 32.0
+
+            # Find matching segment boundaries
+            covering_segs = [s for s in segments if s["start"] >= win_start and s["end"] <= win_end + 6.0]
+            if covering_segs:
+                start_exact = covering_segs[0]["start"]
+                end_exact = min(covering_segs[-1]["end"], start_exact + 42.0)
+                words_count = sum(len(s.get("words", [])) for s in covering_segs)
+            else:
+                start_exact = win_start
+                end_exact = win_end
+                words_count = 50
+
+            dur = round(end_exact - start_exact, 2)
+            if 24.0 <= dur <= 44.0:
+                all_candidates.append({
+                    "start": round(start_exact, 2),
+                    "end": round(end_exact, 2),
+                    "duration": dur,
+                    "spoken_word_count": words_count,
+                    "viral_hook": f"Acoustic Reaction Peak (Score {int(spk['score']*100)}%)",
+                    "title": f"Insane GTA 6 High Energy Moment @ {int(peak_t)}s",
+                    "safe_title": f"Insane_GTA6_Moment_{int(peak_t)}s",
+                    "reason": f"Acoustic spike: loudness={spk['loud']}, shout={spk['shout']}"
+                })
+            if len(all_candidates) >= 3:
+                break
+
+    # 4. Ultimate fallback to word-dense window
     if not all_candidates:
         segments = transcript.get("segments", [])
         best_window = None
         max_words = 0
         for s in segments:
-            # find 30s window
             w_start = s["start"]
             w_end = w_start + 30.0
             words_in_win = sum(

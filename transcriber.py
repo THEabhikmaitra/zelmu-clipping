@@ -2,8 +2,10 @@ import os
 import sys
 import gc
 import json
+import re
 import shutil
 import subprocess
+import urllib.request
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -129,6 +131,169 @@ def extract_audio_wav(
         raise RuntimeError(f"yt-dlp audio extraction failed with exit code {proc.returncode}")
 
     return output_wav_path
+
+def fetch_youtube_captions(
+    url: str,
+    output_json_path: Path,
+    max_duration_sec: Optional[float] = None,
+    progress_callback: Optional[Any] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Directly extracts YouTube's own word-timed captions (json3 format).
+    Takes ~1-2 seconds for long videos with 0 GPU/CPU load.
+    Returns structured transcript dict or None if captions are unavailable.
+    """
+    output_json_path = output_json_path.resolve()
+    if output_json_path.exists() and output_json_path.stat().st_size > 100:
+        try:
+            with open(output_json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if data.get("segments"):
+                    return data
+        except Exception:
+            pass
+
+    if progress_callback:
+        progress_callback(0, 0, "Checking YouTube word-timed captions (Fast Mode)...")
+
+    cmd = [
+        *get_ytdlp_cmd(),
+        "--dump-single-json",
+        "--skip-download",
+        "--no-warnings",
+        url
+    ]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if res.returncode != 0 or not res.stdout.strip():
+            return None
+        info = json.loads(res.stdout)
+    except Exception:
+        return None
+
+    duration = float(info.get("duration") or 0.0)
+    auto = info.get("automatic_captions") or {}
+    manual = info.get("subtitles") or {}
+    lang = info.get("language") or ""
+
+    candidates = [k for k in auto if k.endswith("-orig")]
+    key = None
+    group = auto
+    if lang and f"{lang}-orig" in auto:
+        key = f"{lang}-orig"
+    elif "en-orig" in auto:
+        key = "en-orig"
+    elif lang and lang in auto:
+        key = lang
+    elif "en" in auto:
+        key = "en"
+    elif candidates:
+        key = candidates[0]
+    elif lang and lang in manual:
+        key = lang
+        group = manual
+    elif "en" in manual:
+        key = "en"
+        group = manual
+
+    track = None
+    if key and key in group:
+        for f in group[key]:
+            if f.get("ext") == "json3" and f.get("url"):
+                track = f
+                break
+
+    if not track:
+        return None
+
+    try:
+        req = urllib.request.Request(track["url"], headers={"User-Agent": "Mozilla/5.0"})
+        raw_data = json.loads(urllib.request.urlopen(req, timeout=15).read(40_000_000))
+    except Exception:
+        return None
+
+    raw_words = []
+    skipping = False
+    for ev in raw_data.get("events") or []:
+        segs = [x for x in ev.get("segs") or [] if (x.get("utf8") or "").strip()]
+        if not segs:
+            continue
+        t0, dur = float(ev.get("tStartMs") or 0), float(ev.get("dDurationMs") or 0)
+        timed = len(segs) > 1 or "tOffsetMs" in segs[0]
+        for x in segs:
+            parts = x["utf8"].split()
+            for n, w in enumerate(parts):
+                if skipping:
+                    if w.endswith(("]", ")")):
+                        skipping = False
+                    continue
+                if w[:1] in "[(" and not re.fullmatch(r"[\[(].*[\])]", w):
+                    skipping = True
+                    continue
+                if re.fullmatch(r"[\[(].*[\])]", w) or w in ("[", "]", "__", ">>", "-"):
+                    continue
+                at = t0 + float(x.get("tOffsetMs") or 0) if timed else t0 + dur * n / max(1, len(parts))
+                sec_at = round(at / 1000.0, 2)
+                if max_duration_sec and sec_at > max_duration_sec:
+                    continue
+                raw_words.append({"start": sec_at, "text": w})
+
+    if not raw_words:
+        return None
+
+    raw_words.sort(key=lambda w: w["start"])
+    for n, w in enumerate(raw_words):
+        nxt = raw_words[n + 1]["start"] if n + 1 < len(raw_words) else w["start"] + 0.4
+        w["end"] = round(max(w["start"] + 0.08, min(nxt, w["start"] + 0.6)), 2)
+
+    segments = []
+    cur_words = []
+    for w in raw_words:
+        cur_words.append(w)
+        is_break = w["text"].endswith((".", "!", "?")) or (cur_words and (w["end"] - cur_words[0]["start"]) > 5.0)
+        if is_break and len(cur_words) >= 3:
+            segments.append({
+                "start": cur_words[0]["start"],
+                "end": cur_words[-1]["end"],
+                "text": " ".join([cw["text"] for cw in cur_words]),
+                "words": [{
+                    "word": cw["text"],
+                    "start": cw["start"],
+                    "end": cw["end"],
+                    "probability": 1.0
+                } for cw in cur_words]
+            })
+            cur_words = []
+
+    if cur_words:
+        segments.append({
+            "start": cur_words[0]["start"],
+            "end": cur_words[-1]["end"],
+            "text": " ".join([cw["text"] for cw in cur_words]),
+            "words": [{
+                "word": cw["text"],
+                "start": cw["start"],
+                "end": cw["end"],
+                "probability": 1.0
+            } for cw in cur_words]
+        })
+
+    transcript_data = {
+        "language": key[:2] if key else "en",
+        "language_probability": 1.0,
+        "duration": duration or (segments[-1]["end"] if segments else 0.0),
+        "source": "youtube_json3",
+        "segments": segments
+    }
+
+    output_json_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_json_path, "w", encoding="utf-8") as f:
+        json.dump(transcript_data, f, indent=2, ensure_ascii=False)
+
+    if progress_callback:
+        progress_callback(transcript_data["duration"], transcript_data["duration"], f"Instant YouTube captions parsed ({len(segments)} segments)")
+
+    return transcript_data
 
 def transcribe_audio_whisper(
     audio_path: Path,

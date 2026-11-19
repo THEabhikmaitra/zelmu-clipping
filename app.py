@@ -31,8 +31,8 @@ for _mod_name in ["transcriber", "editor", "analyzer", "safety", "uploader"]:
         importlib.reload(sys.modules[_mod_name])
 
 from safety import sanitize_filename, find_profanities_in_words
-from transcriber import get_ffmpeg_path, extract_audio_wav, transcribe_audio_whisper, get_video_metadata
-from analyzer import extract_candidates_full, OLLAMA_API_URL, MODEL_NAME
+from transcriber import get_ffmpeg_path, extract_audio_wav, transcribe_audio_whisper, get_video_metadata, fetch_youtube_captions
+from analyzer import extract_candidates_full, calculate_audio_spikes, OLLAMA_API_URL, MODEL_NAME
 from editor import (
     generate_karaoke_ass,
     download_video_section,
@@ -637,9 +637,22 @@ with tab1:
         )
         channel_credit = ""
         split_cam = False
+        cam_position = "Top-Left"
+        caption_style = "GTA Neon (Cyan/Pink)"
 
         if "Mode A" in mode:
             split_cam = st.checkbox("Facecam split (9:16)", value=False)
+            if split_cam:
+                cam_position = st.selectbox(
+                    "Facecam Position",
+                    ["Top-Left", "Top-Right", "Bottom-Left", "Bottom-Right"],
+                    index=0
+                )
+            caption_style = st.selectbox(
+                "Caption Style",
+                ["GTA Neon (Cyan/Pink)", "Gold Karaoke (Yellow/White)", "Clean White"],
+                index=0
+            )
         else:
             channel_credit = st.text_input("Credit", placeholder="@handle (auto-detected if blank)", label_visibility="collapsed")
 
@@ -745,51 +758,65 @@ with tab1:
                 else:
                     push_log("Reusing cached 01_audio.wav")
 
-                # Checkpoint 02: Faster-Whisper Transcript (int8 CPU + cleanup)
+                # Checkpoint 02: Instant YouTube Captions or Faster-Whisper Fallback
                 transcript_json = work_dir / "02_transcript.json"
                 if not transcript_json.exists():
-                    push_log("Initializing Faster-Whisper (int8 quantization on CPU)...")
-                    
-                    def on_whisper_progress(curr, total, snippet):
-                        pct = min(100, int((curr / max(1.0, total)) * 100)) if total > 0 else 0
+                    push_log("Checking for YouTube word-timed captions (Fast Mode)...")
+                    transcript = fetch_youtube_captions(raw_url, transcript_json, max_duration_sec=max_scan_sec)
+                    if transcript:
                         elapsed_str = format_elapsed(time.time() - t_start)
                         render_labor_card(
                             labor_box,
-                            stage_name="Stage 2/5: Voice Transcription",
-                            pct=pct,
+                            stage_name="Stage 2/5: Word-Timed Captions (⚡ Instant YT)",
+                            pct=100,
                             elapsed_str=elapsed_str,
-                            current_subtask=f'"{snippet[:28]}..."' if snippet else "Transcribing...",
-                            throughput=f"{format_elapsed(curr)} / {format_elapsed(total)}",
-                            mem_stat="int8 CPU"
+                            current_subtask="YouTube json3 word-level subtitles",
+                            throughput="Zero CPU / ~1s",
+                            mem_stat="Fast Mode"
                         )
-                        push_log(f"Whisper: {snippet}")
+                        push_log(f"⚡ Instant YouTube word-timed captions parsed ({len(transcript.get('segments', []))} segments)")
+                    else:
+                        push_log("YouTube captions unavailable. Initializing Faster-Whisper (int8 CPU)...")
+                        def on_whisper_progress(curr, total, snippet):
+                            pct = min(100, int((curr / max(1.0, total)) * 100)) if total > 0 else 0
+                            elapsed_str = format_elapsed(time.time() - t_start)
+                            render_labor_card(
+                                labor_box,
+                                stage_name="Stage 2/5: Voice Transcription",
+                                pct=pct,
+                                elapsed_str=elapsed_str,
+                                current_subtask=f'"{snippet[:28]}..."' if snippet else "Transcribing...",
+                                throughput=f"{format_elapsed(curr)} / {format_elapsed(total)}",
+                                mem_stat="int8 CPU"
+                            )
+                            push_log(f"Whisper: {snippet}")
 
-                    transcript = transcribe_audio_whisper(audio_wav, transcript_json, progress_callback=on_whisper_progress)
-                    push_log("Transcription complete. Saved to 02_transcript.json")
+                        transcript = transcribe_audio_whisper(audio_wav, transcript_json, progress_callback=on_whisper_progress)
+                        push_log("Transcription complete. Saved to 02_transcript.json")
                 else:
                     push_log("Reusing cached 02_transcript.json")
                     with open(transcript_json, "r", encoding="utf-8") as f:
                         transcript = json.load(f)
 
-                # Checkpoint 03: Ollama Candidates Analysis
+                # Checkpoint 03: Ollama Candidates Analysis (with Acoustic Peak Fusion)
                 candidates_json = work_dir / "03_candidates.json"
                 target_mode = "Mode B" if "Mode B" in mode else "Mode A"
                 
                 if not candidates_json.exists():
                     render_labor_card(
                         labor_box,
-                        stage_name="Stage 3/5: AI Hook & Candidate Analysis",
+                        stage_name="Stage 3/5: AI Hook & Acoustic Spike Analysis",
                         pct=65,
                         elapsed_str=format_elapsed(time.time() - t_start),
-                        current_subtask=f"Ollama {MODEL_NAME} candidate evaluation",
-                        throughput="8-min chunking",
+                        current_subtask=f"Ollama {MODEL_NAME} + 2-4kHz audio energy analysis",
+                        throughput="Acoustic peak fusion",
                         mem_stat="Local LLM"
                     )
-                    push_log(f"Evaluating transcript with Ollama {MODEL_NAME} ({target_mode})...")
-                    analysis = extract_candidates_full(transcript, mode=target_mode, channel_name=active_credit)
+                    push_log(f"Scanning acoustic energy spikes & evaluating transcript with {MODEL_NAME} ({target_mode})...")
+                    analysis = extract_candidates_full(transcript, mode=target_mode, channel_name=active_credit, audio_path=audio_wav)
                     with open(candidates_json, "w", encoding="utf-8") as f:
                         json.dump(analysis, f, indent=2)
-                    push_log("AI analysis complete. Selected candidate clips.")
+                    push_log("AI & acoustic analysis complete. Selected candidate clips.")
                 else:
                     push_log("Reusing cached 03_candidates.json")
                     with open(candidates_json, "r", encoding="utf-8") as f:
@@ -801,6 +828,7 @@ with tab1:
 
                 if target_mode == "Mode A":
                     candidates = analysis.get("candidates", [])
+                    style_key = "neon" if "Neon" in caption_style else ("clean" if "Clean" in caption_style else "karaoke")
 
                     for c_idx, cand in enumerate(candidates):
                         start_t = cand["start"]
@@ -838,8 +866,8 @@ with tab1:
 
                         # Generate .ass subtitles with center safe-zone karaoke
                         ass_file = segments_dir / f"subs_{c_idx}.ass"
-                        push_log("Generating center safe-zone karaoke subtitles (.ass)...")
-                        generate_karaoke_ass(seg_words, ass_file, clip_start_offset=start_t)
+                        push_log(f"Generating center safe-zone {style_key.upper()} subtitles (.ass)...")
+                        generate_karaoke_ass(seg_words, ass_file, clip_start_offset=start_t, style_preset=style_key)
 
                         # Profanities for audio muting
                         flagged = find_profanities_in_words(seg_words)
@@ -863,6 +891,7 @@ with tab1:
                             output_short_path=final_dest,
                             flagged_profanities=flagged,
                             split_layout=split_cam,
+                            facecam_position=cam_position.lower(),
                             logo_path=active_logo_path
                         )
                         push_log(f"Rendered: {final_dest.name}")
