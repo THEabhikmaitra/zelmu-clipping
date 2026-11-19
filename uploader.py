@@ -257,12 +257,30 @@ def upload_single_video(
     video_id = response.get("id")
     log_upload(file_path.name, video_id, full_title)
 
+    # Explicitly release file handles to prevent WinError 32 on Windows
+    if hasattr(media, "_fd") and media._fd:
+        try:
+            media._fd.close()
+        except Exception:
+            pass
+    del media
+    del request
+    import gc
+    gc.collect()
+
     # Move to uploaded_archive directory
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     dest_path = ARCHIVE_DIR / file_path.name
-    if dest_path.exists():
-        dest_path.unlink()
-    shutil.move(str(file_path), str(dest_path))
+    try:
+        if dest_path.exists():
+            dest_path.unlink()
+        shutil.move(str(file_path), str(dest_path))
+    except (PermissionError, OSError):
+        try:
+            shutil.copy2(str(file_path), str(dest_path))
+            file_path.unlink()
+        except Exception:
+            pass
 
     return {
         "video_id": video_id,
