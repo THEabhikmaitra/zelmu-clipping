@@ -45,6 +45,7 @@ from uploader import (
     get_authenticated_service,
     is_authenticated,
     get_channel_info,
+    get_channel_analytics,
     get_auth_url,
     exchange_code_for_token,
     run_local_server_auth,
@@ -1084,9 +1085,11 @@ with tab2:
         if not CLIENT_SECRETS_FILE.exists():
             st.error("Missing client_secrets.json in root folder.")
         elif yt_connected:
-            chan_info = get_channel_info()
-            title = chan_info.get("title", "Connected Account") if chan_info else "Connected Account"
-            st.success(f"Linked: **{title}**")
+            an = get_channel_analytics()
+            title = an.get("title", "Connected Account")
+            subs = an.get("subscribers", 0)
+            views = an.get("views", 0)
+            st.success(f"Linked: **{title}** ({subs:,} subs | {views:,} views)")
             if st.button("Disconnect / Switch Account", use_container_width=True):
                 revoke_token()
                 st.rerun()
@@ -1153,14 +1156,21 @@ with tab2:
                 st.error(f"Error generating auth URL: {e}")
                 st.error(f"Error generating auth URL: {e}")
 
+    # Monetization & Scheduling Options
+    auto_sched = st.checkbox(
+        "🎯 Auto-Schedule for Peak Tier-1 High-CPM Monetization (15:00, 18:00, 21:00 UTC / 10am, 1pm, 4pm EST)",
+        value=True,
+        help="Spaces releases 3-4 hours apart during peak US & UK gaming hours to maximize High-CPM viewer retention without cannibalizing your 5.7k subscriber base."
+    )
+
     # Upload Action Button
     upload_disabled = len(ready_videos) == 0 or not yt_connected
     upload_btn = st.button(
-        "Upload to YouTube (Private)",
+        "Upload to YouTube (Scheduled)" if auto_sched else "Upload to YouTube (Private Draft)",
         type="primary",
         disabled=upload_disabled,
         use_container_width=True,
-        help="Uploads clips directly to your channel with private visibility"
+        help="Uploads clips directly to your channel with private visibility or scheduled public release"
     )
 
     if upload_btn:
@@ -1179,14 +1189,16 @@ with tab2:
         try:
             results = upload_batch_private(
                 max_batch_size=25,
+                auto_schedule=auto_sched,
                 progress_callback=update_ui,
                 chunk_callback=update_chunk
             )
             u_progress.progress(1.0)
-            u_status.success(f"Successfully uploaded {len(results)} clips as Private!")
+            u_status.success(f"Successfully processed {len(results)} clips on YouTube!")
             if results:
                 for r in results:
-                    st.markdown(f"- **{r['title']}** &rarr; [Edit in YouTube Studio]({r['studio_url']})")
+                    sched_note = f" (Scheduled: `{r['publish_at']}`)" if r.get("publish_at") else ""
+                    st.markdown(f"- **{r['title']}**{sched_note} &rarr; [Edit in YouTube Studio]({r['studio_url']})")
                 if st.button("Refresh Queue", key="refresh_after_up"):
                     st.rerun()
         except Exception as e:

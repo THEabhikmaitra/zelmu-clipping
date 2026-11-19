@@ -227,16 +227,71 @@ SEO_TAGS = [
 ]
 
 
+def get_channel_analytics(creds: Optional[Credentials] = None) -> Dict[str, Any]:
+    """Retrieves full channel metrics & demographics from YouTube Data API v3."""
+    if creds is None:
+        creds = get_credentials()
+    if not creds:
+        return {}
+    try:
+        yt = build("youtube", "v3", credentials=creds)
+        resp = yt.channels().list(mine=True, part="snippet,statistics,contentDetails").execute()
+        items = resp.get("items", [])
+        if not items:
+            return {}
+        ch = items[0]
+        stats = ch.get("statistics", {})
+        snippet = ch.get("snippet", {})
+        return {
+            "title": snippet.get("title", "ZELMU ESPORTS"),
+            "customUrl": snippet.get("customUrl", "@zelmuesports"),
+            "subscribers": int(stats.get("subscriberCount", 0)),
+            "views": int(stats.get("viewCount", 0)),
+            "videoCount": int(stats.get("videoCount", 0)),
+            "thumbnail": snippet.get("thumbnails", {}).get("default", {}).get("url", "")
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def calculate_monetization_schedule_slots(count: int) -> List[str]:
+    """
+    Generates RFC 3339 timestamps for Tier-1 High-CPM windows (15:00, 18:00, 21:00 UTC).
+    Spaced 3-4 hours apart during peak US/UK evening viewing.
+    """
+    import datetime
+    slots = []
+    now = datetime.datetime.now(datetime.timezone.utc)
+    target_hours = [15, 18, 21]  # 10am EST, 1pm EST, 4pm EST (Tier-1 Peak)
+    current_day = now.date()
+    if now.hour >= 20:
+        current_day = current_day + datetime.timedelta(days=1)
+
+    day_offset = 0
+    while len(slots) < count:
+        d = current_day + datetime.timedelta(days=day_offset)
+        for h in target_hours:
+            candidate_dt = datetime.datetime(d.year, d.month, d.day, h, 0, 0, tzinfo=datetime.timezone.utc)
+            if candidate_dt > now + datetime.timedelta(hours=1):
+                slots.append(candidate_dt.strftime("%Y-%m-%dT%H:%M:%SZ"))
+                if len(slots) == count:
+                    break
+        day_offset += 1
+    return slots
+
+
 def upload_single_video(
     youtube,
     file_path: Path,
     title: str,
     description: str = "",
     tags: Optional[List[str]] = None,
+    publish_at: Optional[str] = None,
     chunk_callback: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     Uploads a single video strictly enforcing private status, defaultLanguage=en-US, and gaming category.
+    Optionally schedules publication using RFC 3339 publish_at timestamp.
     """
     file_path = file_path.resolve()
     if not file_path.exists():
@@ -267,6 +322,9 @@ def upload_single_video(
             "embeddable": True
         }
     }
+
+    if publish_at:
+        body["status"]["publishAt"] = publish_at
 
     media = MediaFileUpload(
         str(file_path),
@@ -325,11 +383,13 @@ def upload_single_video(
 
 def upload_batch_private(
     max_batch_size: int = 25,
+    auto_schedule: bool = False,
     progress_callback=None,
     chunk_callback=None
 ) -> List[Dict[str, Any]]:
     """
     Uploads up to 25 videos from ./ready_to_upload/ to YouTube as Private.
+    If auto_schedule=True, spaces releases 3-4 hours apart during peak Tier-1 monetization windows (15:00, 18:00, 21:00 UTC).
     Strictly caps at 25 videos to protect channel health.
     """
     READY_DIR.mkdir(parents=True, exist_ok=True)
@@ -342,10 +402,12 @@ def upload_batch_private(
     batch = video_files[:max_batch_size]
     youtube = get_authenticated_service()
 
+    slots = calculate_monetization_schedule_slots(len(batch)) if auto_schedule else [None] * len(batch)
+
     results = []
     total = len(batch)
 
-    for idx, video_path in enumerate(batch):
+    for idx, (video_path, pub_time) in enumerate(zip(batch, slots)):
         title_raw = video_path.stem.replace("_", " ")
         if progress_callback:
             progress_callback(idx + 1, total, video_path.name)
@@ -354,7 +416,15 @@ def upload_batch_private(
             if chunk_callback:
                 chunk_callback(idx + 1, total, video_path.name, pct)
 
-        res = upload_single_video(youtube, video_path, title=title_raw, chunk_callback=on_single_chunk)
+        res = upload_single_video(
+            youtube,
+            video_path,
+            title=title_raw,
+            publish_at=pub_time,
+            chunk_callback=on_single_chunk
+        )
+        if pub_time:
+            res["publish_at"] = pub_time
         results.append(res)
 
     return results
