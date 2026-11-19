@@ -107,16 +107,30 @@ def exchange_code_for_token(code_or_url: str, redirect_uri: str = DEFAULT_REDIRE
     return creds
 
 
+def find_available_port(preferred_port: int = 8080) -> int:
+    """Finds a free port to avoid WinError 10048 socket collisions."""
+    import socket
+    for p in range(preferred_port, preferred_port + 20):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('localhost', p))
+                return p
+            except OSError:
+                continue
+    return 0
+
+
 def run_local_server_auth(port: int = 8080, timeout_seconds: int = 60) -> Credentials:
     """
-    Launches local OAuth listener on specified port with a timeout to prevent hanging.
+    Launches local OAuth listener on free port with a timeout to prevent hanging.
     """
     if not CLIENT_SECRETS_FILE.exists():
         raise FileNotFoundError(f"'{CLIENT_SECRETS_FILE}' not found.")
 
+    free_port = find_available_port(port)
     flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRETS_FILE), SCOPES)
     creds = flow.run_local_server(
-        port=port,
+        port=free_port,
         open_browser=True,
         timeout_seconds=timeout_seconds,
         success_message="Authentication successful! You can now close this tab and return to Zelmu Clipping."

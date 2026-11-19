@@ -1056,9 +1056,22 @@ with tab1:
     else:
         st.caption("No clips generated yet.")
 
+def get_client_id_info():
+    """Reads configured OAuth client_id safely."""
+    if not CLIENT_SECRETS_FILE.exists():
+        return None
+    try:
+        with open(CLIENT_SECRETS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        cfg = data.get("installed") or data.get("web") or {}
+        return cfg.get("client_id", "Unknown")
+    except Exception:
+        return "Invalid JSON"
+
 with tab2:
     ready_videos = sorted(list(READY_DIR.glob("*.mp4")))
     yt_connected = is_authenticated()
+    curr_client_id = get_client_id_info()
 
     # Top Status Row
     col1, col2 = st.columns([1, 1])
@@ -1080,6 +1093,23 @@ with tab2:
         else:
             st.warning("YouTube Not Linked")
 
+    # Client Secrets Uploader / Config
+    with st.expander("🔑 OAuth Client Configuration / Replace Secrets", expanded=not CLIENT_SECRETS_FILE.exists()):
+        if curr_client_id:
+            st.caption(f"Configured Client ID: `{curr_client_id}`")
+        new_secrets_file = st.file_uploader("Upload new client_secrets.json from Google Cloud Console", type=["json"], key="up_secrets_json")
+        if new_secrets_file is not None:
+            try:
+                raw_text = new_secrets_file.read().decode("utf-8")
+                json.loads(raw_text)
+                with open(CLIENT_SECRETS_FILE, "w", encoding="utf-8") as f:
+                    f.write(raw_text)
+                revoke_token()
+                st.success("client_secrets.json updated successfully!")
+                st.rerun()
+            except Exception as ex:
+                st.error(f"Invalid JSON: {ex}")
+
     # If Not Authenticated, show connection options
     if CLIENT_SECRETS_FILE.exists() and not yt_connected:
         st.markdown("""
@@ -1092,7 +1122,7 @@ with tab2:
         auth_tab_auto, auth_tab_manual = st.tabs(["Method 1: One-Click Browser Login", "Method 2: Direct Link & Code"])
 
         with auth_tab_auto:
-            st.caption("Opens Google's sign-in screen in your browser. (Auto-listens on port 8080)")
+            st.caption("Opens Google's sign-in screen in your browser. (Auto-detects free local port)")
             if st.button("Sign In with Google (Browser)", type="primary", use_container_width=True):
                 with st.spinner("Waiting for Google OAuth in your browser (60s timeout)..."):
                     try:
@@ -1100,7 +1130,9 @@ with tab2:
                         st.success("Successfully authenticated!")
                         st.rerun()
                     except Exception as err:
-                        st.error(f"Sign-in timed out or failed: {err}")
+                        st.error(f"Sign-in error: {err}")
+                        if "invalid_client" in str(err) or "10048" in str(err):
+                            st.info("💡 Note: Google reported Error 401 invalid_client. Ensure your OAuth 2.0 Client ID is active in Google Cloud Console.")
 
         with auth_tab_manual:
             try:
@@ -1118,6 +1150,7 @@ with tab2:
                     else:
                         st.warning("Please paste the URL or authorization code first.")
             except Exception as e:
+                st.error(f"Error generating auth URL: {e}")
                 st.error(f"Error generating auth URL: {e}")
 
     # Upload Action Button
