@@ -20,7 +20,7 @@ def get_best_video_encoder() -> List[str]:
     try:
         res_qsv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_qsv", "-f", "null", "-"], capture_output=True, timeout=2)
         if res_qsv.returncode == 0:
-            _BEST_ENCODER_CACHE = ["-c:v", "h264_qsv", "-global_quality", "23"]
+            _BEST_ENCODER_CACHE = ["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23"]
             return _BEST_ENCODER_CACHE
         res_nv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, timeout=2)
         if res_nv.returncode == 0:
@@ -187,6 +187,8 @@ def download_video_section(
         "--newline",
         "--download-sections", section_arg,
         "--force-keyframes-at-cuts",
+        "--concurrent-fragments", "4",
+        "--buffer-size", "16M",
         "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best",
         *ffmpeg_loc_arg,
         "-o", f"{stem_template}.%(ext)s",

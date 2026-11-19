@@ -20,7 +20,9 @@ def query_ollama_json(prompt: str, retries: int = 2, timeout: int = 300) -> Opti
         "format": "json",
         "stream": False,
         "options": {
-            "temperature": 0.2
+            "temperature": 0.1,
+            "num_predict": 384,
+            "num_thread": 4
         }
     }
 

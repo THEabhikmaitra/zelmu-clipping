@@ -7,6 +7,8 @@ import json
 import shutil
 import hashlib
 import datetime
+import threading
+import concurrent.futures
 from pathlib import Path
 
 # Anti-Crash: Ensure local bin (ffmpeg) and venv/Scripts (yt-dlp) are always in PATH
@@ -746,11 +748,13 @@ with tab1:
             detail_box = st.empty()
 
             full_logs = []
+            log_lock = threading.Lock()
             def push_log(msg: str):
                 ts = datetime.datetime.now().strftime("%H:%M:%S")
                 msg_clean = re.sub(r"\s+", " ", msg.strip())
-                full_logs.append(f"[{ts}] {msg_clean}")
-                detail_box.code("\n".join(full_logs), language="bash")
+                with log_lock:
+                    full_logs.append(f"[{ts}] {msg_clean}")
+                    detail_box.code("\n".join(full_logs), language="bash")
 
             for url_idx, raw_url in enumerate(urls):
                 t_start = time.time()
@@ -903,62 +907,39 @@ with tab1:
                     if target_mode == "Mode A":
                         candidates = analysis.get("candidates", [])
                         style_key = "neon" if "Neon" in caption_style else ("clean" if "Clean" in caption_style else "karaoke")
-    
-                        for c_idx, cand in enumerate(candidates):
+
+                        def process_mode_a_candidate(c_idx: int, cand: dict):
                             start_t = cand["start"]
                             end_t = cand["end"]
                             safe_title = cand.get("safe_title", f"GTA6_Moment_{c_idx+1}")
                             final_dest = READY_DIR / f"{safe_title}.mp4"
-    
+
                             if final_dest.exists() and final_dest.stat().st_size > 102400:
                                 push_log(f"Short '{safe_title}' already exists.")
-                                continue
-    
-                            # Section download with live stdout
+                                return final_dest
+
                             raw_seg = segments_dir / f"seg_raw_{c_idx}.mp4"
-                            push_log(f"Downloading clip {c_idx+1}/{len(candidates)} ({start_t}s - {end_t}s)...")
-                            def on_clip_dl(line: str):
-                                elapsed_s = format_elapsed(time.time() - t_start)
-                                render_labor_card(
-                                    labor_box,
-                                    stage_name=f"Stage 4/5: Downloading Clip {c_idx+1}/{len(candidates)}",
-                                    pct=75,
-                                    elapsed_str=elapsed_s,
-                                    current_subtask=f"Downloading section: {start_t}s - {end_t}s",
-                                    throughput="yt-dlp segment",
-                                    mem_stat="Buffered"
-                                )
-                                push_log(line)
-                            download_video_section(raw_url, start_t, end_t, raw_seg, progress_callback=on_clip_dl)
-    
+                            push_log(f"[Parallel Worker #{c_idx+1}] Downloading section ({start_t}s - {end_t}s)...")
+                            download_video_section(raw_url, start_t, end_t, raw_seg)
+
                             # Words in this timestamp
                             seg_words = []
                             for s in transcript.get("segments", []):
                                 for w in s.get("words", []):
                                     if start_t <= w["start"] <= end_t:
                                         seg_words.append(w)
-    
+
                             # Generate .ass subtitles with center safe-zone karaoke
                             ass_file = segments_dir / f"subs_{c_idx}.ass"
-                            push_log(f"Generating center safe-zone {style_key.upper()} subtitles (.ass)...")
+                            push_log(f"[Parallel Worker #{c_idx+1}] Generating {style_key.upper()} subtitles (.ass)...")
                             generate_karaoke_ass(seg_words, ass_file, clip_start_offset=start_t, style_preset=style_key)
-    
+
                             # Profanities for audio muting
                             flagged = find_profanities_in_words(seg_words)
                             if flagged:
-                                push_log(f"Masking {len(flagged)} profanity timestamp(s) with audio muting.")
-    
-                            # Render with micro-pacing zooms + optional logo watermark
-                            render_labor_card(
-                                labor_box,
-                                stage_name=f"Stage 4/5: Rendering Clip {c_idx+1}/{len(candidates)}",
-                                pct=int(80 + (c_idx / max(1, len(candidates))) * 18),
-                                elapsed_str=format_elapsed(time.time() - t_start),
-                                current_subtask="FFmpeg 9:16 vertical crop + safe-zone captions",
-                                throughput="Micro-pacing zooms",
-                                mem_stat="2-Thread CPU"
-                            )
-                            push_log("FFmpeg rendering 9:16 vertical crop + micro-pacing zooms...")
+                                push_log(f"[Parallel Worker #{c_idx+1}] Masking {len(flagged)} profanity timestamp(s).")
+
+                            push_log(f"[Parallel Worker #{c_idx+1}] Rendering short (Intel QSV + dynamic tracking)...")
                             render_mode_a_short(
                                 source_video=raw_seg,
                                 ass_subtitles=ass_file,
@@ -969,42 +950,75 @@ with tab1:
                                 enable_tracking=enable_yolox,
                                 logo_path=active_logo_path
                             )
-                            push_log(f"Rendered: {final_dest.name}")
-    
+                            push_log(f"✓ Rendered: {final_dest.name}")
+                            return final_dest
+
+                        render_labor_card(
+                            labor_box,
+                            stage_name=f"Stage 4/5: Parallel Processing ({len(candidates)} Shorts)",
+                            pct=75,
+                            elapsed_str=format_elapsed(time.time() - t_start),
+                            current_subtask=f"Spawning parallel download & render workers (max 3)",
+                            throughput="ThreadPoolExecutor",
+                            mem_stat="Parallel Pool"
+                        )
+
+                        pool_size = min(3, max(1, len(candidates)))
+                        completed_shorts = 0
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as pool:
+                            future_map = {pool.submit(process_mode_a_candidate, c_idx, cand): c_idx for c_idx, cand in enumerate(candidates)}
+                            for fut in concurrent.futures.as_completed(future_map):
+                                completed_shorts += 1
+                                res_file = fut.result()
+                                pct_val = int(75 + (completed_shorts / max(1, len(candidates))) * 23)
+                                render_labor_card(
+                                    labor_box,
+                                    stage_name=f"Stage 4/5: Rendering ({completed_shorts}/{len(candidates)} Finished)",
+                                    pct=pct_val,
+                                    elapsed_str=format_elapsed(time.time() - t_start),
+                                    current_subtask=f"Finished {res_file.name}",
+                                    throughput="Fast encode",
+                                    mem_stat="Active"
+                                )
+
                     else:
                         # Mode B Transformative Compilation
                         clips_info = analysis.get("clips", [])
                         script = analysis.get("voiceover_script", "")
                         comp_title = analysis.get("safe_title", "GTA6_Viral_Compilation")
                         final_dest = READY_DIR / f"{comp_title}.mp4"
-    
+
                         if not final_dest.exists() or final_dest.stat().st_size < 102400:
                             # Generate Piper Narration
                             narration_wav = work_dir / "05_narration.wav"
                             if not narration_wav.exists():
                                 push_log("Synthesizing energetic Ryan TTS voiceover via Piper...")
                                 generate_piper_tts(script, narration_wav)
-    
-                            # Download micro-clips with live progress
-                            downloaded_clips = []
-                            for m_idx, clip in enumerate(clips_info):
+
+                            # Download micro-clips in parallel
+                            render_labor_card(
+                                labor_box,
+                                stage_name=f"Stage 4/5: Parallel Downloading {len(clips_info)} Highlights",
+                                pct=75,
+                                elapsed_str=format_elapsed(time.time() - t_start),
+                                current_subtask="yt-dlp parallel segments",
+                                throughput="Parallel pool",
+                                mem_stat="Buffered"
+                            )
+                            downloaded_clips = [None] * len(clips_info)
+                            def dl_micro(m_idx, clip):
                                 c_mp4 = segments_dir / f"micro_clip_{m_idx}.mp4"
-                                push_log(f"Downloading micro-highlight {m_idx+1}/3 ({clip['start']}s - {clip['end']}s)...")
-                                def on_mclip_dl(line: str):
-                                    elapsed_s = format_elapsed(time.time() - t_start)
-                                    render_labor_card(
-                                        labor_box,
-                                        stage_name=f"Stage 4/5: Downloading Highlight {m_idx+1}/3",
-                                        pct=75 + (m_idx * 5),
-                                        elapsed_str=elapsed_s,
-                                        current_subtask="yt-dlp micro-clip download",
-                                        throughput="Fast segment",
-                                        mem_stat="Buffered"
-                                    )
-                                    push_log(line)
-                                download_video_section(raw_url, clip["start"], clip["end"], c_mp4, progress_callback=on_mclip_dl)
-                                downloaded_clips.append(c_mp4)
-    
+                                push_log(f"Downloading highlight #{m_idx+1} ({clip['start']}s - {clip['end']}s)...")
+                                download_video_section(raw_url, clip["start"], clip["end"], c_mp4)
+                                return m_idx, c_mp4
+
+                            pool_size = min(3, max(1, len(clips_info)))
+                            with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as pool:
+                                futs = [pool.submit(dl_micro, m_idx, clip) for m_idx, clip in enumerate(clips_info)]
+                                for fut in concurrent.futures.as_completed(futs):
+                                    idx, c_path = fut.result()
+                                    downloaded_clips[idx] = c_path
+
                             # Render Framed Template + Audio Ducking + optional logo watermark
                             render_labor_card(
                                 labor_box,
@@ -1027,7 +1041,6 @@ with tab1:
                             push_log(f"Rendered: {final_dest.name}")
                         else:
                             push_log(f"Transformative Short '{comp_title}' already exists.")
-    
                 except ConnectionError as ce:
                     st.session_state["pipeline_paused"] = True
                     push_log(f"⚠️ PAUSED: Internet connection dropped ({ce}). Checkpoints safe.")
