@@ -71,11 +71,11 @@ def generate_karaoke_ass(
     output_ass_path.parent.mkdir(parents=True, exist_ok=True)
 
     if style_preset == "neon":
-        style_line = "Style: Default,Arial Black,74,&H00FFFF00,&H00D414E0,&H004B0082,&H99000000,-1,0,0,0,100,100,0,0,1,5,0,2,40,40,520,1"
+        style_line = "Style: Default,Arial Black,74,&H00FFFF00,&H00D414E0,&H004B0082,&H99000000,-1,0,0,0,100,100,0,0,1,3,0,2,40,40,520,1"
     elif style_preset == "clean":
-        style_line = "Style: Default,Arial Black,68,&H00FFFFFF,&H00FFFFFF,&H00181818,&H99000000,-1,0,0,0,100,100,0,0,1,4,0,2,40,40,520,1"
+        style_line = "Style: Default,Arial Black,68,&H00FFFFFF,&H00FFFFFF,&H00181818,&H99000000,-1,0,0,0,100,100,0,0,1,3,0,2,40,40,520,1"
     else:  # classic karaoke
-        style_line = "Style: Default,Arial Black,72,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,0,2,40,40,520,1"
+        style_line = "Style: Default,Arial Black,72,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,0,2,40,40,520,1"
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -348,7 +348,7 @@ def render_mode_a_short(
             f"subtitles='{esc_sub}'"
         )
 
-    input_args = ["-i", str(source_video.resolve())]
+    input_args = ["-hwaccel", "auto", "-i", str(source_video.resolve())]
     if has_logo:
         input_args.extend(["-i", str(Path(logo_path).resolve())])
         filter_complex = f"{base_filter}[v_base];[1:v]scale=150:-1[logo];[v_base][logo]overlay=W-w-50:220[v_out]"
@@ -417,9 +417,9 @@ def render_mode_b_short(
     for i, clip in enumerate(clip_videos):
         clip_out = temp_dir / f"framed_clip_{i}.mp4"
         
-        # 9:16 layout: background blurred full canvas + centered 16:9 gameplay + top hook bar + bottom credit badge
+        # 9:16 layout: downscaled ultra-fast background blur + centered 16:9 gameplay + hook bar + credit badge
         vf = (
-            f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];"
+            f"[0:v]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=4:2,scale=1080:1920[bg];"
             f"[0:v]scale=1040:-1[fg];"
             f"[bg][fg]overlay=(W-w)/2:(H-h)/2[base];"
             f"[base]drawtext={f_title_arg}text='{clean_title}':fontsize=56:fontcolor=white:x=(w-text_w)/2:y=220:box=1:boxcolor=black@0.7:boxborderw=14,"
@@ -428,11 +428,12 @@ def render_mode_b_short(
 
         cmd = [
             ffmpeg_bin, "-y",
+            "-hwaccel", "auto",
             "-i", str(clip.resolve()),
             "-filter_complex", vf,
             "-map", "[v_out]",
             "-map", "0:a?",
-            "-c:v", "libx264", "-preset", "veryfast", "-threads", "2", "-crf", "23",
+            *get_best_video_encoder(),
             "-c:a", "aac", "-b:a", "128k",
             str(clip_out)
         ]
