@@ -43,6 +43,12 @@ from editor import (
 from uploader import (
     upload_batch_private,
     get_authenticated_service,
+    is_authenticated,
+    get_channel_info,
+    get_auth_url,
+    exchange_code_for_token,
+    run_local_server_auth,
+    revoke_token,
     CLIENT_SECRETS_FILE,
     TOKEN_FILE,
     LOG_FILE,
@@ -537,8 +543,9 @@ def check_system_diagnostics():
         ollama_ok = False
     diag["ollama"] = ollama_ok
 
-    # 5. YouTube API Secrets
+    # 5. YouTube API Secrets & Token
     diag["client_secrets"] = CLIENT_SECRETS_FILE.exists()
+    diag["yt_auth"] = is_authenticated()
 
     return diag
 
@@ -548,7 +555,12 @@ diag = check_system_diagnostics()
 ffmpeg_status = '<span class="dot dot-ok"></span> FFmpeg' if diag['ffmpeg'] else '<span class="dot dot-err"></span> FFmpeg'
 ytdlp_status = '<span class="dot dot-ok"></span> yt-dlp' if diag['yt_dlp'] else '<span class="dot dot-err"></span> yt-dlp'
 ollama_status = '<span class="dot dot-ok"></span> Ollama' if diag['ollama'] else '<span class="dot dot-warn"></span> Ollama'
-yt_auth_status = '<span class="dot dot-ok"></span> YouTube' if diag['client_secrets'] else '<span class="dot dot-warn"></span> YouTube'
+if diag['yt_auth']:
+    yt_auth_status = '<span class="dot dot-ok"></span> YouTube'
+elif diag['client_secrets']:
+    yt_auth_status = '<span class="dot dot-warn"></span> YouTube (Unlinked)'
+else:
+    yt_auth_status = '<span class="dot dot-err"></span> YouTube (No Secrets)'
 
 st.markdown(f"""
 <div class="zelmu-navbar">
@@ -1046,7 +1058,9 @@ with tab1:
 
 with tab2:
     ready_videos = sorted(list(READY_DIR.glob("*.mp4")))
-    
+    yt_connected = is_authenticated()
+
+    # Top Status Row
     col1, col2 = st.columns([1, 1])
     with col1:
         st.metric("Ready in Queue", f"{len(ready_videos)} clips")
@@ -1055,24 +1069,65 @@ with tab2:
 
     with col2:
         if not CLIENT_SECRETS_FILE.exists():
-            st.error("Missing client_secrets.json.")
+            st.error("Missing client_secrets.json in root folder.")
+        elif yt_connected:
+            chan_info = get_channel_info()
+            title = chan_info.get("title", "Connected Account") if chan_info else "Connected Account"
+            st.success(f"Linked: **{title}**")
+            if st.button("Disconnect / Switch Account", use_container_width=True):
+                revoke_token()
+                st.rerun()
         else:
-            if st.button("Verify Auth", use_container_width=True):
-                with st.spinner("Connecting..."):
-                    try:
-                        yt = get_authenticated_service()
-                        resp = yt.channels().list(mine=True, part="snippet").execute()
-                        items = resp.get("items", [])
-                        channel_title = items[0]["snippet"]["title"] if items else "Connected Account"
-                        st.success(f"Channel: {channel_title}")
-                    except Exception as err:
-                        st.error(f"OAuth error: {err}")
+            st.warning("YouTube Not Linked")
 
+    # If Not Authenticated, show connection options
+    if CLIENT_SECRETS_FILE.exists() and not yt_connected:
+        st.markdown("""
+        <div style="background: rgba(234, 179, 8, 0.08); border: 1px solid rgba(234, 179, 8, 0.3); border-radius: 8px; padding: 14px; margin: 12px 0;">
+            <div style="font-weight: 700; color: #fbbf24; margin-bottom: 6px;">Connect YouTube Channel</div>
+            <div style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 12px;">Link your account once to upload clips directly as Private Shorts. Choose either method below:</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        auth_tab_auto, auth_tab_manual = st.tabs(["Method 1: One-Click Browser Login", "Method 2: Direct Link & Code"])
+
+        with auth_tab_auto:
+            st.caption("Opens Google's sign-in screen in your browser. (Auto-listens on port 8080)")
+            if st.button("Sign In with Google (Browser)", type="primary", use_container_width=True):
+                with st.spinner("Waiting for Google OAuth in your browser (60s timeout)..."):
+                    try:
+                        run_local_server_auth(port=8080, timeout_seconds=60)
+                        st.success("Successfully authenticated!")
+                        st.rerun()
+                    except Exception as err:
+                        st.error(f"Sign-in timed out or failed: {err}")
+
+        with auth_tab_manual:
+            try:
+                auth_url = get_auth_url()
+                st.markdown(f'<a href="{auth_url}" target="_blank" style="display:inline-block; background:#2563eb; color:white; padding:8px 14px; border-radius:6px; text-decoration:none; font-weight:600; margin-bottom:10px;">🔗 1. Open Google Sign-In in New Tab</a>', unsafe_allow_html=True)
+                code_input = st.text_input("2. Paste Redirect URL or Code from browser address bar:", key="oauth_code_in")
+                if st.button("Complete Sign-In", use_container_width=True):
+                    if code_input:
+                        try:
+                            exchange_code_for_token(code_input)
+                            st.success("Connected!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Token exchange error: {e}")
+                    else:
+                        st.warning("Please paste the URL or authorization code first.")
+            except Exception as e:
+                st.error(f"Error generating auth URL: {e}")
+
+    # Upload Action Button
+    upload_disabled = len(ready_videos) == 0 or not yt_connected
     upload_btn = st.button(
         "Upload to YouTube (Private)",
         type="primary",
-        disabled=len(ready_videos) == 0 or not CLIENT_SECRETS_FILE.exists(),
-        use_container_width=True
+        disabled=upload_disabled,
+        use_container_width=True,
+        help="Uploads clips directly to your channel with private visibility"
     )
 
     if upload_btn:
@@ -1094,8 +1149,13 @@ with tab2:
                 progress_callback=update_ui,
                 chunk_callback=update_chunk
             )
-            u_status.success(f"Uploaded {len(results)} videos as Private.")
-            st.rerun()
+            u_progress.progress(1.0)
+            u_status.success(f"Successfully uploaded {len(results)} clips as Private!")
+            if results:
+                for r in results:
+                    st.markdown(f"- **{r['title']}** &rarr; [Edit in YouTube Studio]({r['studio_url']})")
+                if st.button("Refresh Queue", key="refresh_after_up"):
+                    st.rerun()
         except Exception as e:
             u_status.error(f"Upload failed: {str(e)}")
 

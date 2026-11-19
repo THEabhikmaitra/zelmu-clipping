@@ -2,6 +2,7 @@ import os
 import csv
 import json
 import shutil
+import urllib.parse
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -11,18 +12,21 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# YouTube Data API V3 Upload Scope
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+# Scopes: Upload + Readonly (for channel verification)
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly"
+]
 CLIENT_SECRETS_FILE = Path("client_secrets.json")
 TOKEN_FILE = Path("token.json")
 LOG_FILE = Path("upload_log.csv")
 READY_DIR = Path("ready_to_upload")
 ARCHIVE_DIR = Path("uploaded_archive")
+DEFAULT_REDIRECT_URI = "http://localhost:8080/"
 
-def get_authenticated_service():
-    """
-    Handles OAuth 2.0 flow using client_secrets.json and caches token.json.
-    """
+
+def get_credentials() -> Optional[Credentials]:
+    """Returns valid Credentials if available and refreshed, else None."""
     creds = None
     if TOKEN_FILE.exists():
         try:
@@ -30,22 +34,125 @@ def get_authenticated_service():
         except Exception:
             creds = None
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            if not CLIENT_SECRETS_FILE.exists():
-                raise FileNotFoundError(
-                    f"'{CLIENT_SECRETS_FILE}' not found in project directory. "
-                    "Place your Google Cloud client_secrets.json to authenticate."
-                )
-            flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRETS_FILE), SCOPES)
-            creds = flow.run_local_server(port=0)
+    if creds:
+        if creds.valid:
+            return creds
+        if creds.expired and creds.refresh_token:
+            try:
+                creds.refresh(Request())
+                with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+                    f.write(creds.to_json())
+                return creds
+            except Exception:
+                return None
+    return None
 
-        with open(TOKEN_FILE, "w", encoding="utf-8") as token_out:
-            token_out.write(creds.to_json())
 
+def is_authenticated() -> bool:
+    """Checks whether valid YouTube OAuth credentials exist."""
+    return get_credentials() is not None
+
+
+def get_authenticated_service():
+    """
+    Returns YouTube API client. Raises RuntimeError if not authenticated.
+    """
+    creds = get_credentials()
+    if not creds:
+        if not CLIENT_SECRETS_FILE.exists():
+            raise FileNotFoundError(
+                f"'{CLIENT_SECRETS_FILE}' not found. Place client_secrets.json in root."
+            )
+        raise RuntimeError("YouTube not authenticated. Complete Google OAuth sign-in first.")
     return build("youtube", "v3", credentials=creds)
+
+
+def get_auth_url(redirect_uri: str = DEFAULT_REDIRECT_URI) -> str:
+    """Generates direct Google OAuth consent URL."""
+    if not CLIENT_SECRETS_FILE.exists():
+        raise FileNotFoundError(f"'{CLIENT_SECRETS_FILE}' not found.")
+    flow = InstalledAppFlow.from_client_secrets_file(
+        str(CLIENT_SECRETS_FILE),
+        scopes=SCOPES,
+        redirect_uri=redirect_uri
+    )
+    auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
+    return auth_url
+
+
+def exchange_code_for_token(code_or_url: str, redirect_uri: str = DEFAULT_REDIRECT_URI) -> Credentials:
+    """
+    Exchanges authorization code (or full redirected callback URL) for tokens and saves token.json.
+    """
+    if not CLIENT_SECRETS_FILE.exists():
+        raise FileNotFoundError(f"'{CLIENT_SECRETS_FILE}' not found.")
+
+    raw = code_or_url.strip()
+    if "code=" in raw:
+        parsed = urllib.parse.urlparse(raw)
+        params = urllib.parse.parse_qs(parsed.query)
+        code = params.get("code", [raw])[0]
+    else:
+        code = raw
+
+    flow = InstalledAppFlow.from_client_secrets_file(
+        str(CLIENT_SECRETS_FILE),
+        scopes=SCOPES,
+        redirect_uri=redirect_uri
+    )
+    flow.fetch_token(code=code)
+    creds = flow.credentials
+    with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+        f.write(creds.to_json())
+    return creds
+
+
+def run_local_server_auth(port: int = 8080, timeout_seconds: int = 60) -> Credentials:
+    """
+    Launches local OAuth listener on specified port with a timeout to prevent hanging.
+    """
+    if not CLIENT_SECRETS_FILE.exists():
+        raise FileNotFoundError(f"'{CLIENT_SECRETS_FILE}' not found.")
+
+    flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRETS_FILE), SCOPES)
+    creds = flow.run_local_server(
+        port=port,
+        open_browser=True,
+        timeout_seconds=timeout_seconds,
+        success_message="Authentication successful! You can now close this tab and return to Zelmu Clipping."
+    )
+    with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+        f.write(creds.to_json())
+    return creds
+
+
+def get_channel_info(creds: Optional[Credentials] = None) -> Optional[Dict[str, str]]:
+    """Retrieves channel snippet for authenticated account."""
+    if creds is None:
+        creds = get_credentials()
+    if not creds:
+        return None
+    try:
+        yt = build("youtube", "v3", credentials=creds)
+        resp = yt.channels().list(mine=True, part="snippet").execute()
+        items = resp.get("items", [])
+        if items:
+            snip = items[0]["snippet"]
+            return {
+                "title": snip.get("title", "YouTube Channel"),
+                "customUrl": snip.get("customUrl", ""),
+                "thumbnail": snip.get("thumbnails", {}).get("default", {}).get("url", "")
+            }
+        return {"title": "Connected Account", "customUrl": "", "thumbnail": ""}
+    except Exception as e:
+        return {"title": "Connected", "error": str(e)}
+
+
+def revoke_token():
+    """Removes token.json to disconnect current account."""
+    if TOKEN_FILE.exists():
+        TOKEN_FILE.unlink()
+
 
 def ensure_upload_log():
     """Ensures CSV log file exists with proper headers."""
@@ -53,6 +160,7 @@ def ensure_upload_log():
         with open(LOG_FILE, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["Timestamp", "Original_File", "Video_ID", "Title", "Studio_URL", "Privacy"])
+
 
 def log_upload(filename: str, video_id: str, title: str):
     """Logs uploaded video ID and Studio URL to upload_log.csv."""
@@ -63,6 +171,7 @@ def log_upload(filename: str, video_id: str, title: str):
     with open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([now_str, filename, video_id, title, studio_url, "private"])
+
 
 def upload_single_video(
     youtube,
@@ -79,7 +188,6 @@ def upload_single_video(
     if not file_path.exists():
         raise FileNotFoundError(f"Video file does not exist: {file_path}")
 
-    # Enforce title formatting and tags
     full_title = f"{title} #GTA6 #Shorts"
     if len(full_title) > 100:
         full_title = full_title[:97] + "..."
@@ -145,6 +253,7 @@ def upload_single_video(
         "archive_path": str(dest_path)
     }
 
+
 def upload_batch_private(
     max_batch_size: int = 25,
     progress_callback=None,
@@ -161,7 +270,6 @@ def upload_batch_private(
     if not video_files:
         return []
 
-    # Cap at max_batch_size
     batch = video_files[:max_batch_size]
     youtube = get_authenticated_service()
 
@@ -169,7 +277,6 @@ def upload_batch_private(
     total = len(batch)
 
     for idx, video_path in enumerate(batch):
-        # Extract title from filename (removing extension and underscores)
         title_raw = video_path.stem.replace("_", " ")
         if progress_callback:
             progress_callback(idx + 1, total, video_path.name)
