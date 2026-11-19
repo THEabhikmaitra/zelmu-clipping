@@ -71,11 +71,11 @@ def generate_karaoke_ass(
     output_ass_path.parent.mkdir(parents=True, exist_ok=True)
 
     if style_preset == "neon":
-        style_line = "Style: Default,Arial Black,74,&H00FFFF00,&H00D414E0,&H004B0082,&H99000000,-1,0,0,0,100,100,0,0,1,6,3,2,40,40,520,1"
+        style_line = "Style: Default,Arial Black,74,&H00FFFF00,&H00D414E0,&H004B0082,&H99000000,-1,0,0,0,100,100,0,0,1,5,0,2,40,40,520,1"
     elif style_preset == "clean":
-        style_line = "Style: Default,Arial Black,68,&H00FFFFFF,&H00FFFFFF,&H00181818,&H99000000,-1,0,0,0,100,100,0,0,1,5,1,2,40,40,520,1"
+        style_line = "Style: Default,Arial Black,68,&H00FFFFFF,&H00FFFFFF,&H00181818,&H99000000,-1,0,0,0,100,100,0,0,1,4,0,2,40,40,520,1"
     else:  # classic karaoke
-        style_line = "Style: Default,Arial Black,72,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,2,2,40,40,520,1"
+        style_line = "Style: Default,Arial Black,72,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,0,2,40,40,520,1"
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -367,6 +367,7 @@ def render_mode_a_short(
         *get_best_video_encoder(),
         "-c:a", "aac",
         "-b:a", "128k",
+        "-movflags", "+faststart",
         str(output_short_path)
     ]
 

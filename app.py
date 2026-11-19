@@ -962,12 +962,12 @@ with tab1:
                             stage_name=f"Stage 4/5: Parallel Processing ({len(candidates)} Shorts)",
                             pct=75,
                             elapsed_str=format_elapsed(time.time() - t_start),
-                            current_subtask=f"Spawning parallel download & render workers (max 3)",
+                            current_subtask=f"Spawning parallel download & render workers (max 5)",
                             throughput="ThreadPoolExecutor",
                             mem_stat="Parallel Pool"
                         )
 
-                        pool_size = min(3, max(1, len(candidates)))
+                        pool_size = min(5, max(1, len(candidates)))
                         completed_shorts = 0
                         with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as pool:
                             future_map = {pool.submit(process_mode_a_candidate, c_idx, cand): c_idx for c_idx, cand in enumerate(candidates)}
