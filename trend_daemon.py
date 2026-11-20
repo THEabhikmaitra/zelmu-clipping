@@ -240,6 +240,15 @@ def daemon_loop():
                 )
             except Exception as e:
                 push_daemon_log(f"❌ Error producing package for '{t_query}': {e}")
+                # Track failure count to prevent infinite retry loop on broken trends
+                fail_counts = state.get("trend_fail_counts", {})
+                fail_counts[t_query] = fail_counts.get(t_query, 0) + 1
+                state["trend_fail_counts"] = fail_counts
+                if fail_counts[t_query] >= 2:
+                    processed.add(t_query)
+                    state["processed_trends"] = list(processed)[-100:]
+                    push_daemon_log(f"⚠️ Trend '{t_query}' failed {fail_counts[t_query]} times. Skipping to advance pipeline.")
+                save_daemon_state(state)
         else:
             push_daemon_log("✓ No new qualifying breakout trends. Sleeping...")
             set_daemon_progress(

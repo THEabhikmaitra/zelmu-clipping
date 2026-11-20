@@ -977,6 +977,7 @@ def upload_batch_private(
     slots_per_day: int = 6,
     concurrency: int = 2,
     privacy_mode: str = "private",  # "private", "public", or "scheduled"
+    files_subset: Optional[List[Path]] = None,
     progress_callback=None,
     chunk_callback=None,
     log_callback=None
@@ -984,6 +985,7 @@ def upload_batch_private(
     """
     Uploads up to max_batch_size videos from ./ready_to_upload/ to YouTube.
     Supports instant public publishing (privacy_mode="public") or scheduled deployment.
+    Accepts files_subset to prevent cross-module queue contamination.
     If concurrency > 1, streams multiple videos in parallel to saturate upload bandwidth.
     Calculates live aggregate network speed, bytes sent, ETA, and progress.
     Safely captures quota limits without losing un-uploaded video files.
@@ -993,11 +995,17 @@ def upload_batch_private(
 
     READY_DIR.mkdir(parents=True, exist_ok=True)
 
-    video_files = sorted(list(READY_DIR.glob("*.mp4")))
-    if not video_files:
+    if files_subset is not None:
+        batch = [Path(f).resolve() for f in files_subset if Path(f).exists()][:max_batch_size]
+    else:
+        video_files = sorted(list(READY_DIR.glob("*.mp4")))
+        if not video_files:
+            return []
+        batch = video_files[:max_batch_size]
+
+    if not batch:
         return []
 
-    batch = video_files[:max_batch_size]
     # If instant public publish is active, disable scheduling delay
     if privacy_mode == "public":
         slots = [None] * len(batch)

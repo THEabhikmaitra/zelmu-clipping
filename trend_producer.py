@@ -192,14 +192,14 @@ def get_audio_duration(audio_path: Path) -> float:
 
 
 def create_solid_color_broll(output_path: Path, duration: float, is_vertical: bool = True) -> Path:
-    """Generates sleek high-contrast motion background if no external video is available."""
+    """Generates sleek dark news studio motion backdrop if no external video is available."""
     ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
     size_str = "1080x1920" if is_vertical else "1920x1080"
     cmd = [
         ffmpeg_bin, "-y",
         "-f", "lavfi",
-        "-i", f"mptestsrc=rate=30:duration={duration:.2f}",
-        "-vf", f"scale={size_str},eq=brightness=-0.3:contrast=1.4",
+        "-i", f"color=c=0x0a0f1d:s={size_str}:d={duration:.2f}",
+        "-vf", "noise=c1s=8:c1f=t+u,eq=contrast=1.1:brightness=-0.05",
         "-c:v", "libx264", "-preset", "ultrafast",
         str(output_path)
     ]
@@ -434,7 +434,17 @@ def produce_trend_package(
     if auto_upload and all_rendered and is_authenticated():
         update_status(5, "Step 5/5: Publishing Instantly", f"Publishing {len(all_rendered)} assets instantly to YouTube Studio (Public)...", 92, len(rendered_shorts), len(rendered_landscapes))
         log(f"Step 5/5: Publishing {len(all_rendered)} assets ({len(rendered_shorts)} Shorts + {len(rendered_landscapes)} Videos) instantly (PUBLIC) to YouTube Studio...")
-        upload_results = upload_batch_private(max_batch_size=len(all_rendered), auto_schedule=False, privacy_mode="public", log_callback=log)
+        upload_results = upload_batch_private(
+            max_batch_size=len(all_rendered),
+            auto_schedule=False,
+            privacy_mode="public",
+            files_subset=all_rendered,
+            log_callback=log
+        )
+
+    # Clean up intermediate workspace to prevent SSD disk bloat
+    import shutil
+    shutil.rmtree(work_dir, ignore_errors=True)
 
     update_status(5, "Completed", f"Successfully produced & published {len(rendered_shorts)} Reels + {len(rendered_landscapes)} Videos for '{query}'.", 100, len(rendered_shorts), len(rendered_landscapes))
     log(f"🎉 Completed! Generated & published {len(rendered_shorts)} Shorts + {len(rendered_landscapes)} Landscape Videos instantly from '{query}'.")
