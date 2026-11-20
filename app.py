@@ -53,6 +53,16 @@ from editor import (
     check_internet_connection
 )
 from trends_hunter import fetch_google_trends_us, search_trend_source_videos, CATEGORIES
+from trend_daemon import (
+    start_trend_daemon,
+    stop_trend_daemon,
+    is_trend_daemon_running,
+    load_daemon_config,
+    save_daemon_config,
+    get_daemon_progress,
+    get_daemon_logs
+)
+from trend_producer import produce_trend_package
 from uploader import (
     upload_batch_private,
     upload_single_clip_direct,
@@ -1990,8 +2000,61 @@ with tab4:
 
 with tab5:
     st.markdown("<div class='section-title'>🎯 USA BREAKOUT TREND HUNTER (GOOGLE TRENDS 4H)</div>", unsafe_allow_html=True)
-    st.caption("Directly tracks `https://trends.google.com/trending?geo=US&status=active&hours=4&sort=recency`. Detects pre-peak search breakouts in the United States within the last 4 hours before they saturate, finds matching high-energy videos, and sends them directly to the Produce pipeline.")
+    st.caption("Directly tracks `https://trends.google.com/trending?geo=US&status=active&hours=4&sort=recency`. Automatically detects breakout search spikes in the United States in the last 4 hours before they saturate, generates 6+ Reels (9:16) + 2+ Landscape Videos (16:9) per trend, and schedules them directly to YouTube Studio on @zelmuesports.")
 
+    d_cfg = load_daemon_config()
+    d_running = is_trend_daemon_running()
+
+    # Autonomous Daemon Status & Controls
+    col_d_status, col_d_action = st.columns([2, 1])
+    with col_d_status:
+        if d_running:
+            st.success("🟢 **Autonomous Trend Daemon Active:** Polling US breakout trends 24/7. Automatically producing 6 Reels + 2 Landscape Videos per trend.")
+        else:
+            st.warning("⚪ **Autonomous Trend Daemon Idle:** Start background daemon to monitor trends continuously, or use manual 1-click production below.")
+    with col_d_action:
+        if d_running:
+            if st.button("⏹️ Stop Trend Daemon", use_container_width=True, type="secondary"):
+                stop_trend_daemon()
+                st.rerun()
+        else:
+            if st.button("🚀 Start Autonomous Trend Worker", use_container_width=True, type="primary"):
+                start_trend_daemon()
+                st.rerun()
+
+    # Daemon Telemetry (Live 3s Refresh)
+    @st.fragment(run_every="3s")
+    def render_trend_daemon_telemetry():
+        t_prog = get_daemon_progress()
+        is_t_run = is_trend_daemon_running()
+        t_pct = int(t_prog.get("percent", 0))
+        t_stage = t_prog.get("stage_name", "Idle")
+        t_cur_trend = t_prog.get("current_trend", "")
+        t_detail = t_prog.get("step_detail", "Idle")
+        t_next = t_prog.get("next_step", "Waiting")
+        t_shorts = t_prog.get("shorts_done", 0)
+        t_vids = t_prog.get("videos_done", 0)
+
+        if is_t_run:
+            st.progress(max(0.0, min(1.0, t_pct / 100.0)), text=f"Stage: {t_stage} ({t_pct}%) — {t_detail}")
+        else:
+            st.progress(0.0, text="Autonomous Daemon Paused / Idle")
+
+        tm1, tm2, tm3, tm4 = st.columns(4)
+        with tm1:
+            st.metric("Daemon Stage", t_stage, delta=f"{t_pct}%" if is_t_run else None)
+        with tm2:
+            disp_trend = f"{t_cur_trend[:22]}..." if len(t_cur_trend) > 22 else (t_cur_trend or "Scanning...")
+            st.metric("Active Trend", disp_trend, help=t_cur_trend)
+        with tm3:
+            disp_sub = f"{t_detail[:26]}..." if len(t_detail) > 26 else t_detail
+            st.metric("Sub-Step Detail", disp_sub, help=t_detail)
+        with tm4:
+            st.metric("Assets Produced", f"{t_shorts} Reels / {t_vids} Videos", delta=f"{t_shorts+t_vids} total" if (t_shorts+t_vids) > 0 else None)
+
+    render_trend_daemon_telemetry()
+
+    st.markdown("<div class='section-title'>TREND SCANNER PARAMETERS</div>", unsafe_allow_html=True)
     col_t_params1, col_t_params2, col_t_params3, col_t_params4, col_t_btn = st.columns([0.9, 0.9, 1.1, 1.5, 1.3])
     with col_t_params1:
         trend_geo = st.selectbox("Geo Region", ["US", "GB", "CA", "AU"], index=0, key="trend_geo")
@@ -2014,20 +2077,20 @@ with tab5:
             with st.spinner(f"Scraping live Google Trends ({CATEGORIES[sel_cat_key]['label']}, geo={trend_geo}, hours={trend_hours})..."):
                 scanned_trends = fetch_google_trends_us(geo=trend_geo, hours=trend_hours, sort=trend_sort, category_id=sel_cat_id)
                 st.session_state["cached_us_trends"] = scanned_trends
-                st.session_state["last_trends_scan_ts"] = datetime.datetime.now().strftime("%H:%M:%S")
+                st.session_state["last_trends_scan_ts"] = datetime.datetime.now().strftime("%m/%d/%y, %I:%M %p")
 
     trends_data = st.session_state.get("cached_us_trends", [])
     scan_ts = st.session_state.get("last_trends_scan_ts", "")
 
     if trends_data:
-        st.success(f"✓ Found **{len(trends_data)} active breakout trends** across **{CATEGORIES[sel_cat_key]['label']}** in {trend_geo} (Past {trend_hours}h). Last scan: {scan_ts}")
+        st.markdown(f"### Trends · {scan_ts} ({len(trends_data)} Active US Breakouts)")
 
-        # Niche filter
+        # Topic filter
         niche_col1, niche_col2 = st.columns([2, 1])
         with niche_col1:
-            niche_keyword = st.text_input("Filter by Topic / Keyword (optional):", value="", placeholder="e.g. any keyword, sports, celebrity, gaming")
+            niche_keyword = st.text_input("Filter by Topic / Keyword (optional):", value="", placeholder="e.g. search keyword, gta, sports, viral, tech")
         with niche_col2:
-            video_topic_suffix = st.text_input("YouTube Search Suffix (leave empty for broad search):", value=cat_default_suffix, placeholder="e.g. leave empty or gameplay/reaction/moments")
+            video_topic_suffix = st.text_input("YouTube Search Suffix:", value=cat_default_suffix, placeholder="e.g. gameplay, moments, reaction")
 
         filtered_trends = trends_data
         if niche_keyword.strip():
@@ -2035,16 +2098,33 @@ with tab5:
             filtered_trends = [t for t in trends_data if kw_low in t["query"].lower()]
             st.caption(f"Showing {len(filtered_trends)} matching trends for '{niche_keyword}'")
 
-        for idx, tr in enumerate(filtered_trends[:25]):
-            with st.container():
-                c_q, c_v, c_act = st.columns([3, 1.2, 1.8])
-                with c_q:
-                    st.markdown(f"**#{idx+1} {tr['query'].upper()}**")
-                    st.caption(f"[📈 View Google Trends Graph]({tr['explore_url']})")
-                with c_v:
-                    st.metric("Velocity", tr["formatted_traffic"])
-                with c_act:
-                    if st.button(f"⚡ Find Videos & Send to Produce", key=f"btn_trend_{idx}"):
+        for idx, tr in enumerate(filtered_trends[:30]):
+            with st.expander(f"#{idx+1} {tr['query'].upper()} — {tr['search_vol_display']} ({tr['started_time']})", expanded=(idx < 2)):
+                c1, c2 = st.columns([2.5, 1.5])
+                with c1:
+                    st.markdown(f"**Search Volume:** `{tr['search_vol_display']}` | **Started:** `{tr['started_time']}` (🟢 Active)")
+                    st.markdown(f"**Trend Breakdown (All):** *{tr['breakdown_display']}*")
+                    st.markdown(f"[🔗 Google Search Link]({tr['search_link']}) | [📈 Google Trends Explore Link]({tr['explore_link']})")
+
+                    # In the news links
+                    if st.button("📰 Load Live News Links", key=f"btn_news_{idx}"):
+                        news_items = get_trend_news_articles(tr['query'], max_articles=3)
+                        tr["news_articles"] = news_items
+                        if news_items:
+                            st.write("**Top News Headlines:**")
+                            for ni in news_items:
+                                st.markdown(f"- [{ni['title']}]({ni['url']}) *({ni['source']})*")
+                        else:
+                            st.caption("No immediate Google News articles found.")
+                with c2:
+                    st.markdown("##### Content Actions")
+                    if st.button(f"🚀 Produce 6 Reels + 2 Videos", key=f"btn_pkg_{idx}", type="primary", use_container_width=True):
+                        with st.spinner(f"Producing 6 Reels + 2 Landscape Videos for '{tr['query']}'..."):
+                            pkg_res = produce_trend_package(tr, auto_upload=is_authenticated())
+                            st.success(f"✓ Successfully produced {pkg_res['total_rendered']} assets! (6 Reels + 2 Videos).")
+                            st.rerun()
+
+                    if st.button(f"⚡ Clip in Tab 1 (Produce)", key=f"btn_clip_{idx}", use_container_width=True):
                         with st.spinner(f"Searching YouTube videos for '{tr['query']}'..."):
                             vids = search_trend_source_videos(tr['query'], max_results=3, topic_filter=video_topic_suffix)
                             if vids:
@@ -2054,6 +2134,12 @@ with tab5:
                                 st.rerun()
                             else:
                                 st.warning("No recent YouTube videos found for this trend.")
-                st.divider()
+
+    # Live Event Stream for Autonomous Daemon
+    st.markdown("<div class='section-title'>AUTONOMOUS TREND DAEMON EVENT STREAM (LIVE 3S REFRESH)</div>", unsafe_allow_html=True)
+    t_logs = get_daemon_logs(max_lines=30)
+    if t_logs:
+        st.code("\n".join(t_logs[-25:]), language="bash")
     else:
-        st.info("Click **[🔥 Scan USA Breakout Trends]** above to fetch live trending topics from Google Trends.")
+        st.caption("No autonomous trend events logged yet. Start daemon to begin automated 24/7 trend processing.")
+

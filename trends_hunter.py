@@ -7,8 +7,11 @@ Directly parses the native ds:0 payload without 3rd-party API keys or rate limit
 
 import urllib.request
 import urllib.parse
+import xml.etree.ElementTree as ET
 import re
 import json
+import time
+import datetime
 import subprocess
 from typing import List, Dict, Any, Optional
 from transcriber import get_ytdlp_cmd
@@ -25,17 +28,61 @@ CATEGORIES = {
 }
 
 
+def _format_time_ago(timestamp: float) -> str:
+    """Formats epoch timestamp into relative time (e.g. '20 minutes ago', '2 hours ago')."""
+    now = time.time()
+    diff = max(0, int(now - timestamp))
+    mins = diff // 60
+    if mins < 60:
+        return f"{max(1, mins)} minutes ago"
+    hours = mins // 60
+    return f"{hours} hour ago" if hours == 1 else f"{hours} hours ago"
+
+
+def get_trend_news_articles(query: str, max_articles: int = 3) -> List[Dict[str, str]]:
+    """Fetches top recent news headline links for a trending topic via Google News RSS."""
+    clean_q = urllib.parse.quote(query.strip())
+    url = f"https://news.google.com/rss/search?q={clean_q}&hl=en-US&gl=US&ceid=US:en"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    articles = []
+    try:
+        with urllib.request.urlopen(req, timeout=3.5) as resp:
+            root = ET.fromstring(resp.read())
+            for item in root.findall(".//item")[:max_articles]:
+                t = item.find("title")
+                l = item.find("link")
+                pub = item.find("source")
+                source_name = pub.text if pub is not None and pub.text else "News"
+                if t is not None and l is not None and t.text and l.text:
+                    articles.append({
+                        "title": t.text.strip(),
+                        "url": l.text.strip(),
+                        "source": source_name
+                    })
+    except Exception:
+        pass
+    return articles
+
+
 def fetch_google_trends_us(
     geo: str = "US",
     hours: int = 4,
     sort: str = "recency",
     status: str = "active",
-    category_id: int = 0
+    category_id: int = 0,
+    include_news: bool = True
 ) -> List[Dict[str, Any]]:
     """
     Fetches real-time breakout trends across All Categories or specific category from:
     https://trends.google.com/trending?geo=US&status=active&hours=4&sort=recency
-    Parses native ds:0 payload directly. 0 API keys required.
+    Extracts all table columns:
+    - Trends Time
+    - Search Vol (+ growth %)
+    - Started time (e.g. '20 minutes ago', Active status)
+    - Trend breakdown(all)
+    - In the news links
+    - Search link
+    - Explore link
     """
     cat_param = f"&cat={category_id}" if category_id and category_id > 0 else ""
     url = f"https://trends.google.com/trending?geo={geo}&status={status}&hours={hours}&sort={sort}{cat_param}"
@@ -59,19 +106,57 @@ def fetch_google_trends_us(
 
         parsed = json.loads(data_match.group(1))
         items = parsed[1] if len(parsed) > 1 and isinstance(parsed[1], list) else []
+        snapshot_time_str = datetime.datetime.now().strftime("%m/%d/%y, %I:%M %p")
+
         results = []
         for it in items:
             if not isinstance(it, list) or len(it) == 0:
                 continue
             query = it[0]
-            traffic = it[6] if len(it) > 6 else 0
-            fmt_traffic = f"{traffic:,}+" if isinstance(traffic, (int, float)) and traffic > 0 else "🔥 Breakout"
-            explore_link = f"https://trends.google.com/trends/explore?q={urllib.parse.quote(str(query))}&geo={geo}"
+            if not query:
+                continue
+
+            # Timestamp when trend started
+            started_ts = float(it[3][0]) if len(it) > 3 and it[3] and isinstance(it[3], list) else time.time()
+            started_str = _format_time_ago(started_ts)
+
+            # Search volume and growth percentage
+            traffic = it[6] if len(it) > 6 and it[6] is not None else 0
+            pct_raw = it[8] if len(it) > 8 and it[8] is not None else 0
+            pct_formatted = f"+{pct_raw*10}%" if pct_raw > 0 else ""
+
+            if isinstance(traffic, (int, float)) and traffic >= 1000:
+                vol_str = f"{traffic//1000}K+" if traffic < 1000000 else f"{traffic//1000000}M+"
+            elif isinstance(traffic, (int, float)) and traffic > 0:
+                vol_str = f"{traffic}+"
+            else:
+                vol_str = "Rising"
+
+            search_vol_display = f"{vol_str} ({pct_formatted})" if pct_formatted else vol_str
+
+            # Trend breakdown (all related keywords / subqueries)
+            breakdown_list = it[9] if len(it) > 9 and isinstance(it[9], list) else []
+
+            # Direct links
+            encoded_q = urllib.parse.quote(str(query))
+            search_link = f"https://www.google.com/search?q={encoded_q}"
+            explore_link = f"https://trends.google.com/trends/explore?q={encoded_q}&geo={geo}"
+
             results.append({
                 "query": query,
-                "traffic": traffic,
-                "formatted_traffic": fmt_traffic,
-                "explore_url": explore_link
+                "search_vol": traffic,
+                "search_vol_fmt": vol_str,
+                "search_vol_display": search_vol_display,
+                "growth_pct": pct_formatted,
+                "started_time": started_str,
+                "started_ts": started_ts,
+                "is_active": True,
+                "trend_breakdown": breakdown_list,
+                "breakdown_display": " · ".join(breakdown_list[:5]) if breakdown_list else query,
+                "search_link": search_link,
+                "explore_link": explore_link,
+                "trends_time": snapshot_time_str,
+                "news_articles": []  # Loaded on demand or batch
             })
         return results
     except Exception as e:
