@@ -86,6 +86,15 @@ from watcher import (
     get_watcher_logs,
     get_watcher_progress
 )
+from livestream_buffer import (
+    load_livestream_config,
+    save_livestream_config,
+    is_livestream_running,
+    start_livestream_daemon,
+    stop_livestream_daemon,
+    get_livestream_logs,
+    get_livestream_progress
+)
 
 # Ensure base directories exist
 WORKSPACE_DIR = Path("workspace")
@@ -676,7 +685,12 @@ def render_labor_card(
     placeholder.markdown(html, unsafe_allow_html=True)
 
 # Instant Client-Side Tabs (Positioned inside Top Fixed Navbar beside logo)
-tab1, tab2, tab3 = st.tabs(["Produce", "Upload", "🤖 24/7 Autopilot Watcher"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "Produce",
+    "Upload",
+    "🤖 24/7 Channel Watcher (VODs)",
+    "🔴 Live Stream Clipper (HLS)"
+])
 
 with tab1:
     col_l, col_r = st.columns([1.6, 1])
@@ -1900,3 +1914,125 @@ with tab3:
             st.caption("No watcher events recorded yet. Start autopilot to begin streaming channel checks.")
 
     render_autopilot_live_telemetry()
+
+with tab4:
+    st.markdown("<div class='section-title'>🔴 LIVE STREAM ROLLING BUFFER & HLS CLIPPER</div>", unsafe_allow_html=True)
+    live_cfg = load_livestream_config()
+    live_running = is_livestream_running()
+
+    # Status Banner
+    col_l_status, col_l_action = st.columns([2, 1])
+    with col_l_status:
+        if live_running:
+            st.success("🟢 **Live Stream Buffer Active:** Monitoring active YouTube livestreams for rolling HLS clip capture.")
+        else:
+            st.info("⚪ **Live Stream Buffer Idle:** Daemon paused. Click 'Start Live Stream Clipper' to capture rolling HLS windows from live streams.")
+
+    with col_l_action:
+        if live_running:
+            if st.button("⏹️ Stop Live Clipper", type="secondary", use_container_width=True, key="btn_stop_live_clipper"):
+                stop_livestream_daemon()
+                live_cfg["enabled"] = False
+                save_livestream_config(live_cfg)
+                st.rerun()
+        else:
+            if st.button("▶️ Start Live Stream Clipper", type="primary", use_container_width=True, key="btn_start_live_clipper"):
+                raw_chs = st.session_state.get("txt_live_channels", "")
+                if raw_chs.strip():
+                    live_cfg["channels"] = [c.strip() for c in raw_chs.splitlines() if c.strip()]
+                live_cfg["enabled"] = True
+                save_livestream_config(live_cfg)
+                start_livestream_daemon()
+                st.rerun()
+
+    st.markdown("---")
+
+    # Config Grid
+    col_lcfg_left, col_lcfg_right = st.columns([1.5, 1])
+
+    with col_lcfg_left:
+        st.caption("TARGET LIVESTREAMS OR CHANNEL LIVE HANDLES (One URL per line)")
+        if "txt_live_channels" not in st.session_state:
+            st.session_state["txt_live_channels"] = "\n".join(live_cfg.get("channels", []))
+        live_ch_input = st.text_area(
+            "Live Streams to Monitor",
+            height=140,
+            label_visibility="collapsed",
+            help="Enter YouTube livestream URLs or channel live handles (e.g. https://www.youtube.com/@IShowSpeed/live)",
+            key="txt_live_channels"
+        )
+
+    with col_lcfg_right:
+        st.caption("ROLLING BUFFER & CLIPPING SETTINGS")
+        slice_dur = st.select_slider(
+            "Rolling Buffer Window",
+            options=[180, 300, 600, 900],
+            value=live_cfg.get("slice_duration_seconds", 300),
+            format_func=lambda x: f"{x // 60} Minutes Buffer",
+            key="sl_live_slice_dur"
+        )
+        shorts_per_slice = st.slider("Shorts per Live Slice", min_value=1, max_value=4, value=live_cfg.get("shorts_per_slice", 2), key="sl_live_shorts_slice")
+        live_auto_up = st.checkbox("🎯 Auto-Schedule to YouTube Studio", value=live_cfg.get("auto_upload", True), key="chk_live_auto_up", help="Automatically schedules live shorts across High-CPM monetization slots")
+        live_hook = st.checkbox("🔥 Burn '🔴 LIVE' Hook Badge", value=live_cfg.get("enable_hook_badge", True), key="chk_live_hook", help="Burns dynamic '🔴 LIVE HIGHLIGHT' curiosity badge into frame 1")
+
+    if st.button("💾 Save Live Stream Configuration", use_container_width=True, key="btn_save_live_cfg"):
+        raw_chs = st.session_state.get("txt_live_channels", "")
+        parsed_chs = [c.strip() for c in raw_chs.splitlines() if c.strip()]
+        live_cfg["channels"] = parsed_chs
+        live_cfg["slice_duration_seconds"] = slice_dur
+        live_cfg["shorts_per_slice"] = shorts_per_slice
+        live_cfg["auto_upload"] = live_auto_up
+        live_cfg["enable_hook_badge"] = live_hook
+        save_livestream_config(live_cfg)
+        st.success(f"✓ Live Stream configuration saved! ({len(parsed_chs)} stream targets registered)")
+
+    # Live Real-Time Telemetry for Tab 4
+    @st.fragment(run_every="3s")
+    def render_livestream_live_telemetry():
+        l_prog = get_livestream_progress()
+        is_l_run = is_livestream_running()
+
+        l_pct = l_prog.get("percentage", 0)
+        l_status = l_prog.get("status", "idle")
+        l_stage = l_prog.get("stage_label", "Live Buffer Idle")
+        l_detail = l_prog.get("step_detail", "Ready to monitor active live streams.")
+        l_next = l_prog.get("next_step", "Scan live streams")
+        l_title = l_prog.get("stream_title", "")
+        l_author = l_prog.get("channel_name", "")
+        l_cur_clip = l_prog.get("current_clip", 0)
+        l_tot_clips = l_prog.get("total_clips", 0)
+
+        st.markdown("<div class='section-title'>⚡ LIVE STREAM HLS BUFFER TELEMETRY</div>", unsafe_allow_html=True)
+
+        # Progress bar
+        if is_l_run and l_status not in ("idle", "waiting"):
+            st.progress(min(1.0, max(0.0, l_pct / 100.0)), text=f"{l_stage} — {l_pct}% COMPLETE")
+        elif is_l_run and l_status == "waiting":
+            st.progress(1.0, text="✓ Live Slice Clipped & Scheduled — Monitoring stream")
+        else:
+            st.progress(0.0, text="Live Buffer Paused / Idle")
+
+        # Telemetry metrics
+        lm1, lm2, lm3, lm4 = st.columns(4)
+        with lm1:
+            st.metric("Live Stage", l_stage, delta=f"{l_pct}% complete" if is_l_run and l_pct > 0 else None)
+        with lm2:
+            display_ltitle = f"{l_title[:24]}..." if len(l_title) > 24 else (l_title or "No active stream")
+            st.metric("Active Stream", display_ltitle, help=f"{l_title} (@{l_author})" if l_title else None)
+        with lm3:
+            clip_str = f" (Clip {l_cur_clip}/{l_tot_clips})" if l_tot_clips > 0 else ""
+            display_ldetail = f"{l_detail[:28]}..." if len(l_detail) > 28 else l_detail
+            st.metric("Buffer Sub-Step", display_ldetail, delta=clip_str if clip_str else None, help=l_detail)
+        with lm4:
+            display_lnext = f"{l_next[:26]}..." if len(l_next) > 26 else l_next
+            st.metric("Next Step", display_lnext, help=l_next)
+
+        # Live Autonomous Event Stream
+        st.markdown("<div class='section-title'>LIVE STREAM EVENT STREAM (LIVE 3S REFRESH)</div>", unsafe_allow_html=True)
+        l_logs = get_livestream_logs()
+        if l_logs:
+            st.code("\n".join(l_logs[-25:]), language="bash")
+        else:
+            st.caption("No livestream events recorded yet. Start live buffer to begin capturing HLS streams.")
+
+    render_livestream_live_telemetry()
