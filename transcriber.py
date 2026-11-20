@@ -108,10 +108,14 @@ def extract_audio_wav(
     stem_template = str(output_wav_path.parent / f"raw_audio_{output_wav_path.stem}")
 
     ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
+    ffmpeg_dir_args = ["--ffmpeg-location", str(Path(ffmpeg_bin).parent)] if ffmpeg_bin else []
+    section_args = ["--download-sections", f"*0-{int(max_duration_sec)}"] if max_duration_sec and max_duration_sec > 0 else []
 
     cmd = [
         *get_ytdlp_cmd(),
         "--newline",
+        *section_args,
+        *ffmpeg_dir_args,
         "-f", "ba[ext=m4a]/ba/b",
         "--concurrent-fragments", "4",
         "--no-playlist",

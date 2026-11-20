@@ -10,6 +10,7 @@ import time
 import json
 import subprocess
 import threading
+import concurrent.futures
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -370,29 +371,21 @@ def process_livestream_slice(
     rendered_files = []
     style_key = "neon" if "neon" in caption_style.lower() else ("clean" if "clean" in caption_style.lower() else "karaoke")
 
-    # Stage 4: Render Shorts
-    for c_idx, win in enumerate(windows[:shorts_count]):
+    # Stage 4: Parallel QSV Rendering
+    candidates = windows[:shorts_count]
+    rendered_files = []
+    from editor import find_profanities_in_words
+
+    def process_live_short(c_idx: int, win: dict):
         start_t = win["start"]
         end_t = win["end"]
         clip_title = win.get("title", f"Live_Moment_{c_idx+1}")
         clean_name = f"Live_{author}_{slice_ts}_{c_idx+1}"
         final_dest = READY_DIR / f"{clean_name}.mp4"
 
-        rnd_pct = 50 + int((c_idx / max(1, shorts_count)) * 35)
-        set_livestream_progress(
-            status="rendering",
-            current_step=4,
-            total_steps=5,
-            percentage=rnd_pct,
-            stage_label=f"Stage 4/5: Rendering Clip {c_idx+1}/{shorts_count}",
-            step_detail=f"Cutting & rendering vertical Short ({start_t:.1f}s - {end_t:.1f}s) with Intel QSV + Neon...",
-            next_step="Stage 5/5: Auto-Schedule to Studio",
-            current_clip=c_idx + 1,
-            total_clips=shorts_count
-        )
-        push_live_log(f"🎬 [Stage 4/5] Rendering Live Short {c_idx+1}/{shorts_count} ({start_t:.1f}s - {end_t:.1f}s)...")
+        if final_dest.exists() and final_dest.stat().st_size > 102400:
+            return final_dest
 
-        # Cut segment from local slice
         raw_seg = segments_dir / f"live_seg_{c_idx}.mp4"
         dur = max(1.0, end_t - start_t)
         subprocess.run([
@@ -405,9 +398,8 @@ def process_livestream_slice(
         ], capture_output=True)
 
         if not is_valid_video_file(raw_seg):
-            continue
+            return None
 
-        # Subtitles
         seg_words = []
         for s in transcript.get("segments", []):
             for w in s.get("words", []):
@@ -417,7 +409,6 @@ def process_livestream_slice(
         ass_file = segments_dir / f"live_subs_{c_idx}.ass"
         generate_karaoke_ass(seg_words, ass_file, clip_start_offset=start_t, style_preset=style_key)
 
-        from editor import find_profanities_in_words
         flagged = find_profanities_in_words(seg_words)
 
         render_mode_a_short(
@@ -430,7 +421,30 @@ def process_livestream_slice(
             hook_title="🔴 LIVE HIGHLIGHT" if enable_hook_badge else None
         )
         push_live_log(f"✓ [Stage 4/5] Rendered Live Short: {final_dest.name}")
-        rendered_files.append(final_dest)
+        return final_dest
+
+    pool_workers = min(3, max(1, len(candidates)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=pool_workers) as pool:
+        future_map = {pool.submit(process_live_short, c_idx, win): c_idx for c_idx, win in enumerate(candidates)}
+        while any(not fut.done() for fut in future_map):
+            time.sleep(1)
+            done_count = sum(1 for fut in future_map if fut.done())
+            rnd_pct = 50 + int((done_count / max(1, len(candidates))) * 35)
+            set_livestream_progress(
+                status="rendering",
+                current_step=4,
+                total_steps=5,
+                percentage=rnd_pct,
+                stage_label=f"Stage 4/5: Parallel QSV Rendering ({done_count}/{len(candidates)})",
+                step_detail=f"Rendering {done_count}/{len(candidates)} live clips via Intel QSV...",
+                next_step="Stage 5/5: Auto-Schedule to Studio",
+                current_clip=done_count,
+                total_clips=len(candidates)
+            )
+        for fut in future_map:
+            res_dest = fut.result()
+            if res_dest and res_dest.exists() and res_dest.stat().st_size > 102400:
+                rendered_files.append(res_dest)
 
     # Stage 5: Upload / Schedule
     if auto_upload and rendered_files and is_authenticated():

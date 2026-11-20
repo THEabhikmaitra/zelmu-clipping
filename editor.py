@@ -3,12 +3,14 @@ import sys
 import subprocess
 import json
 import re
+import time
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from safety import mask_text, build_audio_mute_filter, find_profanities_in_words
 from transcriber import get_ffmpeg_path, get_ytdlp_cmd
 
 _BEST_ENCODER_CACHE = None
+_STREAM_URL_CACHE: Dict[str, Tuple[float, Tuple[str, str]]] = {}
 
 def get_best_video_encoder() -> List[str]:
     """Detects fastest available hardware encoder (Intel QSV > NVENC > CPU ultrafast)."""
@@ -20,15 +22,15 @@ def get_best_video_encoder() -> List[str]:
     try:
         res_qsv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_qsv", "-f", "null", "-"], capture_output=True, timeout=6)
         if res_qsv.returncode == 0:
-            _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23", "-async_depth", "4", "-look_ahead", "0"]
+            _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23", "-async_depth", "4", "-look_ahead", "0", "-bf", "0"]
             return _BEST_ENCODER_CACHE
         res_nv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, timeout=6)
         if res_nv.returncode == 0:
-            _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]
+            _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "h264_nvenc", "-preset", "p1", "-cq", "23", "-bf", "0"]
             return _BEST_ENCODER_CACHE
     except Exception:
         pass
-    _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "libx264", "-preset", "ultrafast", "-threads", "0", "-crf", "23"]
+    _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-crf", "23", "-threads", "0"]
     return _BEST_ENCODER_CACHE
 
 def escape_ffmpeg_path(path: Path) -> str:
@@ -156,8 +158,15 @@ def check_internet_connection(timeout: float = 2.5) -> bool:
     return False
 
 
-def get_direct_stream_urls(url: str) -> Optional[tuple]:
-    """Extracts direct HTTPS video and audio playback stream URLs via yt-dlp in ~2s."""
+def get_direct_stream_urls(url: str, force_refresh: bool = False) -> Optional[Tuple[str, str]]:
+    """Extracts direct HTTPS video and audio playback stream URLs via yt-dlp in ~2s with 2h in-memory TTL caching."""
+    global _STREAM_URL_CACHE
+    now = time.time()
+    if not force_refresh and url in _STREAM_URL_CACHE:
+        ts, cached_urls = _STREAM_URL_CACHE[url]
+        if now - ts < 7200:  # 2 hours validity
+            return cached_urls
+
     cmd = [
         *get_ytdlp_cmd(),
         "-g",
@@ -169,9 +178,13 @@ def get_direct_stream_urls(url: str) -> Optional[tuple]:
         if proc.returncode == 0:
             lines = [l.strip() for l in proc.stdout.splitlines() if l.strip().startswith("http")]
             if len(lines) >= 2:
-                return (lines[0], lines[1])
+                res = (lines[0], lines[1])
+                _STREAM_URL_CACHE[url] = (now, res)
+                return res
             elif len(lines) == 1:
-                return (lines[0], lines[0])
+                res = (lines[0], lines[0])
+                _STREAM_URL_CACHE[url] = (now, res)
+                return res
     except Exception:
         pass
     return None
@@ -197,10 +210,11 @@ def stream_video_section_fast(
     url: str,
     start_sec: float,
     end_sec: float,
-    output_mp4_path: Path
+    output_mp4_path: Path,
+    stream_urls: Optional[Tuple[str, str]] = None
 ) -> Optional[Path]:
     """Streams and cuts remote video in ~3-4s directly via FFmpeg Range requests without yt-dlp download wait."""
-    urls = get_direct_stream_urls(url)
+    urls = stream_urls or get_direct_stream_urls(url)
     if not urls:
         return None
 
@@ -211,8 +225,16 @@ def stream_video_section_fast(
 
     cmd = [
         ffmpeg_bin, "-y",
+        "-reconnect", "1",
+        "-reconnect_at_eof", "1",
+        "-reconnect_streamed", "1",
+        "-reconnect_delay_max", "2",
         "-ss", f"{start_sec:.2f}",
         "-i", v_url,
+        "-reconnect", "1",
+        "-reconnect_at_eof", "1",
+        "-reconnect_streamed", "1",
+        "-reconnect_delay_max", "2",
         "-ss", f"{start_sec:.2f}",
         "-i", a_url,
         "-t", f"{dur:.2f}",
@@ -245,7 +267,8 @@ def download_video_section(
     end_sec: float,
     output_mp4_path: Path,
     progress_callback: Optional[Any] = None,
-    max_retries: int = 3
+    max_retries: int = 3,
+    stream_urls: Optional[Tuple[str, str]] = None
 ) -> Path:
     """
     Downloads only the approved timestamp section.
@@ -262,7 +285,7 @@ def download_video_section(
     # Fast Path 1: Zero-disk direct stream seek cut in ~3s
     if progress_callback:
         progress_callback("⚡ Fast streaming remote section (Zero-Disk cut)...")
-    fast_cut = stream_video_section_fast(url, start_sec, end_sec, output_mp4_path)
+    fast_cut = stream_video_section_fast(url, start_sec, end_sec, output_mp4_path, stream_urls=stream_urls)
     if fast_cut and is_valid_video_file(fast_cut):
         if progress_callback:
             progress_callback(f"✓ Fast stream cut complete: {output_mp4_path.name}")
@@ -431,7 +454,8 @@ def render_mode_a_short(
                 f"x=(w-text_w)/2:y=240:box=1:boxcolor=black@0.80:boxborderw=12:enable='between(t,0,1.2)'"
             )
 
-    anti_cid_v = ",scale=1084:1928,crop=1080:1920:2:4" if enable_anti_content_id else ""
+    # Single-pass scale and anti-content-id evasion: scales directly to target dimensions
+    scale_expr = "scale=1084:1928,crop=1080:1920:2:4" if enable_anti_content_id else "scale=1080:1920"
 
     tracking_keys = None
     if enable_tracking and not split_layout:
@@ -446,18 +470,16 @@ def render_mode_a_short(
         crop_x = generate_panning_crop_expr(tracking_keys)
         base_filter = (
             f"[0:v]crop=in_h*9/16:in_h:'{crop_x}':0,"
-            f"scale=1080:1920,"
+            f"{scale_expr},"
             f"subtitles='{esc_sub}'"
             f"{hook_filter_str}"
-            f"{anti_cid_v}"
         )
     elif not split_layout:
         base_filter = (
             f"[0:v]crop=in_h*9/16:in_h:(in_w-in_h*9/16)/2:0,"
-            f"scale=1080:1920,"
+            f"{scale_expr},"
             f"subtitles='{esc_sub}'"
             f"{hook_filter_str}"
-            f"{anti_cid_v}"
         )
     else:
         cam_coords = {
@@ -467,14 +489,15 @@ def render_mode_a_short(
             "bottom-right": "in_w*0.65:in_h*0.55"
         }
         cam_xy = cam_coords.get(facecam_position.lower(), "0:0")
+        stack_cid = ",scale=1084:1928,crop=1080:1920:2:4" if enable_anti_content_id else ""
         base_filter = (
             f"[0:v]split=2[cam][game];"
             f"[cam]crop=in_w*0.35:in_h*0.45:{cam_xy},scale=1080:672[top];"
             f"[game]crop=in_h*9/16:in_h:(in_w-in_h*9/16)/2:0,scale=1080:1248[bot];"
-            f"[top][bot]vstack=inputs=2,"
+            f"[top][bot]vstack=inputs=2"
+            f"{stack_cid},"
             f"subtitles='{esc_sub}'"
             f"{hook_filter_str}"
-            f"{anti_cid_v}"
         )
 
     input_args = ["-hwaccel", "auto", "-i", str(source_video.resolve())]

@@ -45,6 +45,7 @@ from transcriber import (
 from analyzer import extract_candidates_full, calculate_audio_spikes, OLLAMA_API_URL, MODEL_NAME
 from editor import (
     generate_karaoke_ass,
+    get_direct_stream_urls,
     download_video_section,
     generate_piper_tts,
     render_mode_a_short,
@@ -983,6 +984,10 @@ with tab1:
                         candidates = analysis.get("candidates", [])
                         style_key = "neon" if "Neon" in caption_style else ("clean" if "Clean" in caption_style else "karaoke")
 
+                        # Prefetch direct stream URLs once for all parallel workers (avoids redundant yt-dlp calls)
+                        push_log("Prefetching direct HTTP stream URLs (Zero-Disk pipeline)...")
+                        prefetched_stream_urls = get_direct_stream_urls(raw_url)
+
                         def process_mode_a_candidate(c_idx: int, cand: dict):
                             start_t = cand["start"]
                             end_t = cand["end"]
@@ -996,7 +1001,7 @@ with tab1:
 
                             raw_seg = segments_dir / f"seg_raw_{c_idx}.mp4"
                             push_log(f"[Parallel Worker #{c_idx+1}] Downloading section ({start_t}s - {end_t}s)...")
-                            download_video_section(raw_url, start_t, end_t, raw_seg)
+                            download_video_section(raw_url, start_t, end_t, raw_seg, stream_urls=prefetched_stream_urls)
 
                             # Words in this timestamp
                             seg_words = []
@@ -1084,7 +1089,8 @@ with tab1:
                                 push_log("Synthesizing energetic Ryan TTS voiceover via Piper...")
                                 generate_piper_tts(script, narration_wav)
 
-                            # Download micro-clips in parallel
+                            # Download micro-clips in parallel using prefetched stream URLs
+                            prefetched_stream_urls = get_direct_stream_urls(raw_url)
                             render_labor_card(
                                 labor_box,
                                 stage_name=f"Stage 4/5: Parallel Downloading {len(clips_info)} Highlights",
@@ -1098,7 +1104,7 @@ with tab1:
                             def dl_micro(m_idx, clip):
                                 c_mp4 = segments_dir / f"micro_clip_{m_idx}.mp4"
                                 push_log(f"Downloading highlight #{m_idx+1} ({clip['start']}s - {clip['end']}s)...")
-                                download_video_section(raw_url, clip["start"], clip["end"], c_mp4)
+                                download_video_section(raw_url, clip["start"], clip["end"], c_mp4, stream_urls=prefetched_stream_urls)
                                 return m_idx, c_mp4
 
                             pool_size = min(3, max(1, len(clips_info)))

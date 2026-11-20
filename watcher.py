@@ -458,33 +458,32 @@ def process_video_autonomous(
     style_key = "neon" if "neon" in caption_style.lower() else ("clean" if "clean" in caption_style.lower() else "karaoke")
 
     rendered_files = []
-    from editor import download_video_section, find_profanities_in_words
+    from editor import get_direct_stream_urls, download_video_section, find_profanities_in_words
+    prefetched_stream_urls = get_direct_stream_urls(video_url)
 
-    # Stage 4: Rendering Shorts
+    # Stage 4: Rendering Shorts (Parallel QSV Pipeline)
     total_cands = len(candidates)
-    for c_idx, cand in enumerate(candidates):
+    set_watcher_progress(
+        active=True, video_id=vid_id, video_title=title,
+        stage=4, total_stages=5, stage_name="Rendering Shorts",
+        step_detail=f"Spawning parallel QSV workers for {total_cands} clips...",
+        next_step="Auto-scheduling to Studio",
+        percent=55, current_clip=0, total_clips=total_cands
+    )
+
+    def process_watcher_clip(c_idx: int, cand: dict):
         start_t = cand["start"]
         end_t = cand["end"]
         safe_title = cand.get("safe_title", f"GTA6_Moment_{c_idx+1}")
         dest_stem = f"{safe_title}_{c_idx+1}_{int(start_t)}s"
         final_dest = READY_DIR / f"{dest_stem}.mp4"
 
-        render_pct = 55 + int(((c_idx + 1) / total_cands) * 35)
-        set_watcher_progress(
-            active=True, video_id=vid_id, video_title=title,
-            stage=4, total_stages=5, stage_name="Rendering Shorts",
-            step_detail=f"Rendering clip {c_idx+1}/{total_cands}: '{safe_title}' ({int(end_t-start_t)}s) via Intel QSV...",
-            next_step=f"Clip {c_idx+2}" if c_idx+1 < total_cands else "Auto-scheduling to Studio",
-            percent=render_pct, current_clip=c_idx+1, total_clips=total_cands
-        )
-
         if final_dest.exists() and final_dest.stat().st_size > 102400:
-            rendered_files.append(final_dest)
-            continue
+            return final_dest
 
         raw_seg = segments_dir / f"seg_raw_{c_idx}.mp4"
-        push_watcher_log(f"Cutting section ({start_t:.1f}s - {end_t:.1f}s) via zero-disk stream cut...")
-        download_video_section(video_url, start_t, end_t, raw_seg)
+        push_watcher_log(f"[Worker #{c_idx+1}] Cutting section ({start_t:.1f}s - {end_t:.1f}s) via zero-disk stream cut...")
+        download_video_section(video_url, start_t, end_t, raw_seg, stream_urls=prefetched_stream_urls)
 
         seg_words = []
         for s in transcript.get("segments", []):
@@ -497,7 +496,7 @@ def process_video_autonomous(
 
         flagged = find_profanities_in_words(seg_words)
 
-        push_watcher_log(f"Rendering short {c_idx+1}/{total_cands} with Intel QSV & viral hook badge...")
+        push_watcher_log(f"[Worker #{c_idx+1}] Rendering short with Intel QSV & viral hook badge...")
         render_mode_a_short(
             source_video=raw_seg,
             ass_subtitles=ass_file,
@@ -508,7 +507,27 @@ def process_video_autonomous(
             hook_title=cand.get("title", "GTA 6 INSANE MOMENT") if enable_hook_badge else None
         )
         push_watcher_log(f"✓ Rendered autonomous short: {final_dest.name}")
-        rendered_files.append(final_dest)
+        return final_dest
+
+    pool_workers = min(3, max(1, total_cands))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=pool_workers) as pool:
+        future_map = {pool.submit(process_watcher_clip, c_idx, cand): c_idx for c_idx, cand in enumerate(candidates)}
+        while any(not fut.done() for fut in future_map):
+            time.sleep(1)
+            done_count = sum(1 for fut in future_map if fut.done())
+            render_pct = 55 + int((done_count / max(1, total_cands)) * 35)
+            set_watcher_progress(
+                active=True, video_id=vid_id, video_title=title,
+                stage=4, total_stages=5, stage_name="Rendering Shorts",
+                step_detail=f"Rendering {done_count}/{total_cands} clips in parallel via Intel QSV...",
+                next_step="Auto-scheduling to Studio" if done_count == total_cands else f"Processing remaining ({total_cands - done_count})",
+                percent=render_pct, current_clip=done_count, total_clips=total_cands
+            )
+
+        for fut in future_map:
+            res_dest = fut.result()
+            if res_dest and res_dest.exists() and res_dest.stat().st_size > 102400:
+                rendered_files.append(res_dest)
 
     # Stage 5: Scheduling to Studio
     if auto_upload and rendered_files and is_authenticated():
