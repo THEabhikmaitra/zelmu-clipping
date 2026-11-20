@@ -749,10 +749,12 @@ def upload_single_video(
     description: str = "",
     tags: Optional[List[str]] = None,
     publish_at: Optional[str] = None,
+    privacy_status: str = "private",
     chunk_callback: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
-    Uploads a single video strictly enforcing private status, defaultLanguage=en-US, and gaming category.
+    Uploads a single video strictly enforcing defaultLanguage=en-US and gaming category.
+    Supports privacy_status="private", "public", or "scheduled" (via publish_at).
     Emits real-time transfer telemetry (MB/s, bytes sent, ETA, %) on every chunk.
     """
     import time
@@ -772,6 +774,7 @@ def upload_single_video(
                 full_tags.append(t)
 
     full_description = format_seo_description(full_title, description)
+    effective_privacy = "private" if publish_at else privacy_status
 
     body = {
         "snippet": {
@@ -783,7 +786,7 @@ def upload_single_video(
             "defaultAudioLanguage": "en-US"
         },
         "status": {
-            "privacyStatus": "private",  # Strictly enforce private status
+            "privacyStatus": effective_privacy,
             "selfDeclaredMadeForKids": False,
             "embeddable": True
         }
@@ -847,7 +850,7 @@ def upload_single_video(
     avg_speed_mbps = avg_speed_MBs * 8.0
 
     video_id = response.get("id")
-    privacy_type = "scheduled" if publish_at else "private"
+    privacy_type = "scheduled" if publish_at else effective_privacy
     log_upload(
         filename=file_path.name,
         video_id=video_id,
@@ -893,6 +896,42 @@ def upload_single_video(
         "upload_sec": total_duration,
         "speed_mbps": avg_speed_mbps
     }
+
+
+def upload_single_clip_direct(
+    file_path: Path,
+    title: str,
+    description: str = "",
+    tags: Optional[List[str]] = None,
+    privacy_mode: str = "private",  # "private", "public", "scheduled"
+    chunk_callback: Optional[Any] = None
+) -> Dict[str, Any]:
+    """
+    Directly uploads or schedules a single video from the Produce UI.
+    """
+    creds = get_credentials()
+    if not creds:
+        raise RuntimeError("YouTube not connected. Authenticate in Tab 2 first.")
+    youtube = get_authenticated_service()
+
+    publish_at = None
+    if privacy_mode == "scheduled":
+        slots = calculate_monetization_schedule_slots(1, slots_per_day=6)
+        publish_at = slots[0] if slots else None
+        effective_privacy = "private"
+    else:
+        effective_privacy = privacy_mode
+
+    return upload_single_video(
+        youtube=youtube,
+        file_path=file_path,
+        title=title,
+        description=description,
+        tags=tags,
+        publish_at=publish_at,
+        privacy_status=effective_privacy,
+        chunk_callback=chunk_callback
+    )
 
 
 def upload_batch_private(

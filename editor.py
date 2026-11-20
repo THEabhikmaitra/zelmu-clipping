@@ -177,6 +177,22 @@ def get_direct_stream_urls(url: str) -> Optional[tuple]:
     return None
 
 
+def is_valid_video_file(file_path: Path) -> bool:
+    """Verifies that a video file exists, is >100KB, and has readable streams with valid container headers."""
+    if not file_path.exists() or file_path.stat().st_size < 102400:
+        return False
+    try:
+        proc = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        return proc.returncode == 0 and len(proc.stdout.strip()) > 0
+    except Exception:
+        return False
+
+
 def stream_video_section_fast(
     url: str,
     start_sec: float,
@@ -191,6 +207,7 @@ def stream_video_section_fast(
     v_url, a_url = urls
     ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
     dur = max(1.0, end_sec - start_sec)
+    part_path = output_mp4_path.with_suffix(".part.mp4")
 
     cmd = [
         ffmpeg_bin, "-y",
@@ -204,14 +221,21 @@ def stream_video_section_fast(
         "-c:v", "copy",
         "-c:a", "copy",
         "-movflags", "+faststart",
-        str(output_mp4_path)
+        str(part_path)
     ]
     try:
         res = subprocess.run(cmd, capture_output=True, timeout=25)
-        if res.returncode == 0 and output_mp4_path.exists() and output_mp4_path.stat().st_size > 102400:
+        if res.returncode == 0 and is_valid_video_file(part_path):
+            if output_mp4_path.exists():
+                output_mp4_path.unlink()
+            part_path.rename(output_mp4_path)
             return output_mp4_path
+        else:
+            if part_path.exists():
+                part_path.unlink()
     except Exception:
-        pass
+        if part_path.exists():
+            part_path.unlink()
     return None
 
 
@@ -230,14 +254,16 @@ def download_video_section(
     output_mp4_path = output_mp4_path.resolve()
     output_mp4_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if output_mp4_path.exists() and output_mp4_path.stat().st_size > 102400:
+    if is_valid_video_file(output_mp4_path):
         return output_mp4_path
+    elif output_mp4_path.exists():
+        output_mp4_path.unlink()
 
     # Fast Path 1: Zero-disk direct stream seek cut in ~3s
     if progress_callback:
         progress_callback("⚡ Fast streaming remote section (Zero-Disk cut)...")
     fast_cut = stream_video_section_fast(url, start_sec, end_sec, output_mp4_path)
-    if fast_cut:
+    if fast_cut and is_valid_video_file(fast_cut):
         if progress_callback:
             progress_callback(f"✓ Fast stream cut complete: {output_mp4_path.name}")
         return fast_cut
@@ -274,22 +300,25 @@ def download_video_section(
                         progress_callback(line_s)
         proc.wait()
 
-        # Check if file exists with mp4 or mkv
-        if not output_mp4_path.exists():
-            possible = list(output_mp4_path.parent.glob(f"{output_mp4_path.stem}.*"))
-            if possible:
-                if possible[0].suffix.lower() != ".mp4":
-                    ffmpeg_exe = str(ffmpeg_bin or "ffmpeg")
-                    conv_cmd = [
-                        ffmpeg_exe, "-y", "-i", str(possible[0]),
-                        "-c", "copy", str(output_mp4_path)
-                    ]
-                    subprocess.run(conv_cmd, capture_output=True)
-                else:
-                    possible[0].rename(output_mp4_path)
+        # Check if file exists with mp4 or other extensions (webm, mkv)
+        if not output_mp4_path.exists() or not is_valid_video_file(output_mp4_path):
+            candidates = [p for p in output_mp4_path.parent.glob(f"{output_mp4_path.stem}.*") if not p.name.endswith(".part") and p != output_mp4_path]
+            if candidates:
+                src_file = candidates[0]
+                ffmpeg_exe = str(ffmpeg_bin or "ffmpeg")
+                # Transcode to guaranteed compliant H264 MP4 with ultrafast
+                conv_cmd = [
+                    ffmpeg_exe, "-y", "-i", str(src_file),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+                    "-c:a", "aac", "-movflags", "+faststart",
+                    str(output_mp4_path)
+                ]
+                subprocess.run(conv_cmd, capture_output=True)
 
-        if output_mp4_path.exists() and output_mp4_path.stat().st_size > 102400:
+        if is_valid_video_file(output_mp4_path):
             return output_mp4_path
+        elif output_mp4_path.exists():
+            output_mp4_path.unlink()
 
         # If download failed, inspect error
         err_text = "\n".join(logs[-10:]) if logs else "No process output."

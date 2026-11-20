@@ -1,6 +1,7 @@
 """
 Autonomous Channel Watcher Daemon for Zelmu Clipping.
-Monitors YouTube channels for new uploads 24/7, auto-extracts viral Shorts,
+Monitors YouTube channels for new uploads & live streams 24/7,
+auto-extracts viral Shorts using rolling HLS buffers / speech clustering,
 and schedules them to YouTube Studio across peak High-CPM monetization windows.
 """
 
@@ -8,6 +9,7 @@ import os
 import sys
 import time
 import json
+import re
 import subprocess
 import threading
 from pathlib import Path
@@ -41,13 +43,30 @@ DEFAULT_CONFIG = {
     "auto_upload": True,
     "caption_style": "neon",
     "enable_tracking": False,
-    "enable_hook_badge": True
+    "enable_hook_badge": True,
+    "enable_live_monitoring": True
 }
 
 _WATCHER_THREAD = None
 _WATCHER_STOP_EVENT = threading.Event()
 _WATCHER_LOGS = []
 _WATCHER_LOCK = threading.Lock()
+
+_WATCHER_PROGRESS = {
+    "active": False,
+    "video_id": "",
+    "video_title": "",
+    "stage": 0,
+    "total_stages": 5,
+    "stage_name": "Idle",
+    "step_detail": "Daemon idle or waiting for next poll cycle",
+    "next_step": "Scan channels",
+    "percent": 0,
+    "is_live": False,
+    "current_clip": 0,
+    "total_clips": 0,
+    "last_updated": time.time()
+}
 
 
 def push_watcher_log(msg: str):
@@ -56,13 +75,51 @@ def push_watcher_log(msg: str):
     entry = f"[{now_str}] {msg}"
     with _WATCHER_LOCK:
         _WATCHER_LOGS.append(entry)
-        if len(_WATCHER_LOGS) > 100:
+        if len(_WATCHER_LOGS) > 150:
             _WATCHER_LOGS.pop(0)
 
 
 def get_watcher_logs() -> List[str]:
     with _WATCHER_LOCK:
         return list(_WATCHER_LOGS)
+
+
+def set_watcher_progress(
+    active: bool = True,
+    video_id: str = "",
+    video_title: str = "",
+    stage: int = 1,
+    total_stages: int = 5,
+    stage_name: str = "",
+    step_detail: str = "",
+    next_step: str = "",
+    percent: int = 0,
+    is_live: bool = False,
+    current_clip: int = 0,
+    total_clips: int = 0
+):
+    global _WATCHER_PROGRESS
+    with _WATCHER_LOCK:
+        _WATCHER_PROGRESS = {
+            "active": active,
+            "video_id": video_id,
+            "video_title": video_title,
+            "stage": stage,
+            "total_stages": total_stages,
+            "stage_name": stage_name,
+            "step_detail": step_detail,
+            "next_step": next_step,
+            "percent": max(0, min(100, percent)),
+            "is_live": is_live,
+            "current_clip": current_clip,
+            "total_clips": total_clips,
+            "last_updated": time.time()
+        }
+
+
+def get_watcher_progress() -> Dict[str, Any]:
+    with _WATCHER_LOCK:
+        return dict(_WATCHER_PROGRESS)
 
 
 def load_watcher_config() -> Dict[str, Any]:
@@ -131,6 +188,189 @@ def get_channel_recent_videos(channel_url: str, max_videos: int = 3) -> List[Dic
         return []
 
 
+def get_channel_live_video(channel_url: str) -> Optional[Dict[str, Any]]:
+    """Checks if a YouTube channel currently has an active livestream via /live endpoint."""
+    clean_url = channel_url.strip().rstrip("/")
+    if "/videos" in clean_url:
+        clean_url = clean_url.replace("/videos", "")
+    live_target = f"{clean_url}/live"
+
+    cmd = [
+        *get_ytdlp_cmd(),
+        "--no-warnings",
+        "--print", "%(id)s\t%(title)s\t%(is_live)s",
+        live_target
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if proc.returncode == 0 and proc.stdout:
+            parts = proc.stdout.strip().split("\t")
+            if len(parts) >= 2:
+                vid_id = parts[0].strip()
+                title = parts[1].strip()
+                is_live = (parts[2].strip().lower() == "true") if len(parts) > 2 else False
+                if vid_id and len(vid_id) == 11 and is_live:
+                    return {
+                        "id": vid_id,
+                        "title": title,
+                        "url": f"https://www.youtube.com/watch?v={vid_id}",
+                        "is_live": True
+                    }
+    except Exception:
+        pass
+    return None
+
+
+def capture_live_stream_segment(live_url: str, output_path: Path, duration_sec: int = 60) -> bool:
+    """Taps active live HLS m3u8 stream and buffers the trailing duration_sec seconds via FFmpeg."""
+    cmd_g = [
+        *get_ytdlp_cmd(),
+        "-g",
+        "-f", "best[ext=mp4]/best",
+        live_url
+    ]
+    try:
+        proc = subprocess.run(cmd_g, capture_output=True, text=True, timeout=18)
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return False
+        stream_url = proc.stdout.strip().splitlines()[0]
+
+        ffmpeg_bin = get_ffmpeg_path()
+        cmd_cap = [
+            ffmpeg_bin, "-y",
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "2",
+            "-i", stream_url,
+            "-t", str(duration_sec),
+            "-c:v", "copy",
+            "-c:a", "aac",
+            str(output_path)
+        ]
+        p_ff = subprocess.run(cmd_cap, capture_output=True, text=True, timeout=duration_sec + 25)
+        return output_path.exists() and output_path.stat().st_size > 50000
+    except Exception as ex:
+        push_watcher_log(f"Live HLS capture error: {ex}")
+        return False
+
+
+def process_live_stream_autonomous(
+    live_url: str,
+    title: str = "Live Stream",
+    author: str = "Streamer",
+    clip_duration_sec: int = 50,
+    caption_style: str = "neon",
+    enable_hook_badge: bool = True,
+    auto_upload: bool = True
+) -> List[Path]:
+    """Captures rolling live window via HLS buffer, transcribes in ~3s, and renders vertical Short."""
+    meta = get_video_metadata(live_url)
+    vid_id = meta.get("id") or "live_stream"
+    title = meta.get("title") or title
+    author = meta.get("author") or author
+
+    set_watcher_progress(
+        active=True, video_id=vid_id, video_title=title,
+        stage=1, total_stages=5, stage_name="Live HLS Buffer",
+        step_detail=f"Tapping live stream HLS buffer ({clip_duration_sec}s rolling window)...",
+        next_step="Extract audio & run Whisper Turbo",
+        percent=15, is_live=True
+    )
+    push_watcher_log(f"🔴 LIVE STREAM DETECTED: '{title}' ({vid_id}) by @{author}. Buffering trailing {clip_duration_sec}s...")
+
+    work_dir = WORKSPACE_DIR / f"live_{vid_id}_{int(time.time())}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    raw_seg = work_dir / "live_raw.mp4"
+
+    hls_success = capture_live_stream_segment(live_url, raw_seg, duration_sec=clip_duration_sec)
+    if not hls_success or not raw_seg.exists() or raw_seg.stat().st_size < 100000:
+        push_watcher_log(f"Live buffer capture failed for {vid_id}. Retrying next cycle.")
+        set_watcher_progress(active=False, stage=0, stage_name="Idle", step_detail="Live capture timeout. Waiting.", percent=0)
+        return []
+
+    set_watcher_progress(
+        active=True, video_id=vid_id, video_title=title,
+        stage=2, total_stages=5, stage_name="Live Audio Transcription",
+        step_detail="Extracting live audio & generating subtitles (Whisper Turbo)...",
+        next_step="Karaoke subtitle alignment",
+        percent=40, is_live=True
+    )
+    push_watcher_log("Transcribing live segment with Whisper Turbo...")
+    audio_wav = work_dir / "live_audio.wav"
+    ffmpeg_bin = get_ffmpeg_path()
+    subprocess.run([ffmpeg_bin, "-y", "-i", str(raw_seg), "-vn", "-ac", "1", "-ar", "16000", str(audio_wav)], capture_output=True, timeout=20)
+
+    transcript_json = work_dir / "live_transcript.json"
+    transcript = transcribe_audio_whisper(audio_wav, transcript_json)
+    if not transcript or not transcript.get("segments"):
+        transcript = {"segments": [{"words": [{"word": title, "start": 0.5, "end": 3.0}]}]}
+
+    set_watcher_progress(
+        active=True, video_id=vid_id, video_title=title,
+        stage=3, total_stages=5, stage_name="Subtitle Styling",
+        step_detail="Generating NEON karaoke subtitles & hook badge...",
+        next_step="Intel QSV zero-stall hardware rendering",
+        percent=65, is_live=True
+    )
+    words = []
+    for s in transcript.get("segments", []):
+        words.extend(s.get("words", []))
+
+    ass_file = work_dir / "live_subs.ass"
+    style_key = "neon" if "neon" in caption_style.lower() else "clean"
+    generate_karaoke_ass(words, ass_file, clip_start_offset=0.0, style_preset=style_key)
+
+    set_watcher_progress(
+        active=True, video_id=vid_id, video_title=title,
+        stage=4, total_stages=5, stage_name="Hardware GPU Render",
+        step_detail="Rendering 9:16 vertical Short (Intel QSV hardware acceleration)...",
+        next_step="Auto-scheduling to YouTube Studio",
+        percent=85, is_live=True, current_clip=1, total_clips=1
+    )
+    push_watcher_log("Rendering live Short via Intel QSV...")
+    safe_slug = re.sub(r'[^a-zA-Z0-9_-]', '_', title)[:26]
+    dest_name = f"LIVE_{safe_slug}_{int(time.time())}.mp4"
+    READY_DIR.mkdir(parents=True, exist_ok=True)
+    final_dest = READY_DIR / dest_name
+
+    render_mode_a_short(
+        source_video=raw_seg,
+        ass_subtitles=ass_file,
+        output_short_path=final_dest,
+        flagged_profanities=[],
+        split_layout=False,
+        enable_tracking=False,
+        hook_title=f"LIVE: {title[:24]}" if enable_hook_badge else None
+    )
+    push_watcher_log(f"✓ Rendered LIVE short: {final_dest.name}")
+
+    if auto_upload and is_authenticated():
+        set_watcher_progress(
+            active=True, video_id=vid_id, video_title=title,
+            stage=5, total_stages=5, stage_name="Auto Scheduling",
+            step_detail="Pushing Short to @zelmuesports via upload queue...",
+            next_step="Polling next live stream event",
+            percent=95, is_live=True
+        )
+        try:
+            results = upload_batch_private(
+                max_batch_size=1,
+                auto_schedule=True,
+                slots_per_day=6,
+                concurrency=1
+            )
+            push_watcher_log(f"✓ LIVE Short scheduled to YouTube Studio: {dest_name}")
+        except Exception as e:
+            push_watcher_log(f"Auto-upload error: {e}")
+
+    set_watcher_progress(
+        active=False, stage=0, stage_name="Idle",
+        step_detail="Live Short complete. Daemon monitoring channels.",
+        next_step="Scan channels", percent=100
+    )
+    return [final_dest]
+
+
 def process_video_autonomous(
     video_url: str,
     shorts_count: int = 4,
@@ -139,7 +379,15 @@ def process_video_autonomous(
     enable_hook_badge: bool = True,
     auto_upload: bool = True
 ) -> List[Path]:
-    """Runs end-to-end extraction, karaoke rendering, and scheduling for a new video."""
+    """Runs end-to-end extraction, karaoke rendering, and scheduling with real-time stage progress."""
+    # Stage 1: Metadata & Stream Info
+    set_watcher_progress(
+        active=True, video_id="", video_title="Analyzing Video",
+        stage=1, total_stages=5, stage_name="Ingestion & Metadata",
+        step_detail=f"Extracting video metadata & format specifications from YouTube...",
+        next_step="Captions & audio transcription",
+        percent=10
+    )
     meta = get_video_metadata(video_url)
     vid_id = meta.get("id") or "unknown"
     title = meta.get("title") or "GTA 6 Video"
@@ -153,7 +401,14 @@ def process_video_autonomous(
     segments_dir.mkdir(parents=True, exist_ok=True)
     READY_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 1. Transcript
+    # Stage 2: Transcript & Audio
+    set_watcher_progress(
+        active=True, video_id=vid_id, video_title=title,
+        stage=2, total_stages=5, stage_name="Dialogue Transcription",
+        step_detail=f"Extracting captions & running acoustic analysis on '{title[:30]}...'...",
+        next_step="AI highlight candidate scoring",
+        percent=30
+    )
     transcript_json = work_dir / "02_transcript.json"
     transcript = None
     if transcript_json.exists():
@@ -161,19 +416,29 @@ def process_video_autonomous(
             transcript = json.load(f)
 
     if not transcript:
+        push_watcher_log(f"Fetching official captions for {vid_id}...")
         transcript = fetch_youtube_captions(video_url, transcript_json, max_duration_sec=900.0)
 
     if not transcript:
+        push_watcher_log(f"No captions found. Running Whisper Turbo speech recognition...")
         audio_wav = work_dir / "01_audio.wav"
         extract_audio_wav(video_url, audio_wav, max_duration_sec=900.0)
         transcript = transcribe_audio_whisper(audio_wav, transcript_json)
 
-    # 2. Candidate Analysis
+    # Stage 3: Candidate Analysis
+    set_watcher_progress(
+        active=True, video_id=vid_id, video_title=title,
+        stage=3, total_stages=5, stage_name="Highlight Candidate Scoring",
+        step_detail=f"Scoring speech density and acoustic excitement spikes for {shorts_count} Shorts...",
+        next_step="Direct stream cutting & Intel QSV rendering",
+        percent=50
+    )
     cand_json = work_dir / "03_candidates_mode_a.json"
     if cand_json.exists():
         with open(cand_json, "r", encoding="utf-8") as f:
             analysis = json.load(f)
     else:
+        push_watcher_log(f"Evaluating transcript highlights for {shorts_count} candidate clips...")
         analysis = extract_candidates_full(
             transcript,
             mode="Mode A",
@@ -184,11 +449,14 @@ def process_video_autonomous(
             json.dump(analysis, f, indent=2)
 
     candidates = analysis.get("candidates", [])
+    push_watcher_log(f"Selected {len(candidates)} high-potential candidate moments.")
     style_key = "neon" if "neon" in caption_style.lower() else ("clean" if "clean" in caption_style.lower() else "karaoke")
 
     rendered_files = []
     from editor import download_video_section, find_profanities_in_words
 
+    # Stage 4: Rendering Shorts
+    total_cands = len(candidates)
     for c_idx, cand in enumerate(candidates):
         start_t = cand["start"]
         end_t = cand["end"]
@@ -196,11 +464,21 @@ def process_video_autonomous(
         dest_stem = f"{safe_title}_{c_idx+1}_{int(start_t)}s"
         final_dest = READY_DIR / f"{dest_stem}.mp4"
 
+        render_pct = 55 + int(((c_idx + 1) / total_cands) * 35)
+        set_watcher_progress(
+            active=True, video_id=vid_id, video_title=title,
+            stage=4, total_stages=5, stage_name="Rendering Shorts",
+            step_detail=f"Rendering clip {c_idx+1}/{total_cands}: '{safe_title}' ({int(end_t-start_t)}s) via Intel QSV...",
+            next_step=f"Clip {c_idx+2}" if c_idx+1 < total_cands else "Auto-scheduling to Studio",
+            percent=render_pct, current_clip=c_idx+1, total_clips=total_cands
+        )
+
         if final_dest.exists() and final_dest.stat().st_size > 102400:
             rendered_files.append(final_dest)
             continue
 
         raw_seg = segments_dir / f"seg_raw_{c_idx}.mp4"
+        push_watcher_log(f"Cutting section ({start_t:.1f}s - {end_t:.1f}s) via zero-disk stream cut...")
         download_video_section(video_url, start_t, end_t, raw_seg)
 
         seg_words = []
@@ -214,6 +492,7 @@ def process_video_autonomous(
 
         flagged = find_profanities_in_words(seg_words)
 
+        push_watcher_log(f"Rendering short {c_idx+1}/{total_cands} with Intel QSV & viral hook badge...")
         render_mode_a_short(
             source_video=raw_seg,
             ass_subtitles=ass_file,
@@ -226,8 +505,15 @@ def process_video_autonomous(
         push_watcher_log(f"✓ Rendered autonomous short: {final_dest.name}")
         rendered_files.append(final_dest)
 
-    # 3. Autonomous Scheduling
+    # Stage 5: Scheduling to Studio
     if auto_upload and rendered_files and is_authenticated():
+        set_watcher_progress(
+            active=True, video_id=vid_id, video_title=title,
+            stage=5, total_stages=5, stage_name="Auto Scheduling",
+            step_detail=f"Scheduling {len(rendered_files)} new Shorts across peak monetization slots...",
+            next_step="Polling next channel check",
+            percent=95, current_clip=total_cands, total_clips=total_cands
+        )
         push_watcher_log(f"Scheduling {len(rendered_files)} new Shorts across peak monetization slots...")
         try:
             results = upload_batch_private(
@@ -236,10 +522,15 @@ def process_video_autonomous(
                 slots_per_day=6,
                 concurrency=2
             )
-            push_watcher_log(f"✓ Scheduled {len(results)} Shorts to YouTube Studio!")
+            push_watcher_log(f"✓ Scheduled {len(results)} Shorts to YouTube Studio (@zelmuesports)!")
         except Exception as e:
             push_watcher_log(f"Auto-upload error: {e}")
 
+    set_watcher_progress(
+        active=False, stage=0, stage_name="Idle",
+        step_detail=f"Completed {len(rendered_files)} Shorts for '{title[:25]}...'. Waiting for next scan cycle.",
+        next_step="Scan channels", percent=100
+    )
     return rendered_files
 
 
@@ -249,11 +540,13 @@ def run_watcher_loop():
     while not _WATCHER_STOP_EVENT.is_set():
         cfg = load_watcher_config()
         if not cfg.get("enabled", False):
+            set_watcher_progress(active=False, stage=0, stage_name="Paused", step_detail="Autopilot is paused. Click Start to monitor channels.", percent=0)
             time.sleep(5)
             continue
 
         if not check_internet_connection():
             push_watcher_log("Internet connection dropped. Pausing watcher poll...")
+            set_watcher_progress(active=False, stage=0, stage_name="Offline", step_detail="Internet connection dropped. Pausing poll.", percent=0)
             time.sleep(30)
             continue
 
@@ -261,12 +554,42 @@ def run_watcher_loop():
         processed_ids = set(state.get("processed_video_ids", []))
         channels = cfg.get("channels", [])
 
-        push_watcher_log(f"Scanning {len(channels)} target channels for new GTA 6 uploads...")
+        push_watcher_log(f"Scanning {len(channels)} target channels for new GTA 6 uploads & livestreams...")
+        set_watcher_progress(
+            active=True, video_id="", video_title="Channel Scanner",
+            stage=1, total_stages=5, stage_name="Polling Channels",
+            step_detail=f"Scanning {len(channels)} channels for new uploads & active livestreams...",
+            next_step="Process new uploads",
+            percent=10
+        )
         new_found = 0
 
         for ch in channels:
             if _WATCHER_STOP_EVENT.is_set():
                 break
+
+            # 1. Check for Active Livestreams if enabled
+            if cfg.get("enable_live_monitoring", True):
+                live_item = get_channel_live_video(ch)
+                if live_item and live_item["id"] not in processed_ids:
+                    vid_id = live_item["id"]
+                    push_watcher_log(f"🔴 ACTIVE LIVESTREAM DETECTED: {live_item['title']} ({live_item['url']})")
+                    try:
+                        process_live_stream_autonomous(
+                            live_url=live_item["url"],
+                            title=live_item["title"],
+                            caption_style=cfg.get("caption_style", "neon"),
+                            enable_hook_badge=cfg.get("enable_hook_badge", True),
+                            auto_upload=cfg.get("auto_upload", True)
+                        )
+                        processed_ids.add(vid_id)
+                        new_found += 1
+                        state["processed_video_ids"] = list(processed_ids)
+                        save_watcher_state(state)
+                    except Exception as ex:
+                        push_watcher_log(f"Error clipping livestream {vid_id}: {ex}")
+
+            # 2. Check for Recent Videos
             recent = get_channel_recent_videos(ch, max_videos=2)
             for v in recent:
                 vid_id = v["id"]
@@ -289,15 +612,21 @@ def run_watcher_loop():
                         push_watcher_log(f"Error processing {vid_id}: {ex}")
 
         interval_sec = max(60, int(cfg.get("check_interval_minutes", 30)) * 60)
-        push_watcher_log(f"Scan complete. {new_found} new upload(s) processed. Next scan in {interval_sec // 60}m.")
+        push_watcher_log(f"Scan complete. {new_found} new item(s) processed. Next scan in {interval_sec // 60}m.")
+        set_watcher_progress(
+            active=False, stage=0, stage_name="Idle",
+            step_detail=f"Monitoring {len(channels)} channels. Next scan in {interval_sec // 60}m.",
+            next_step=f"Auto-scan in {interval_sec // 60}m",
+            percent=100
+        )
 
-        # Sleep in small slices to respond quickly to stop requests
         for _ in range(interval_sec // 5):
             if _WATCHER_STOP_EVENT.is_set():
                 break
             time.sleep(5)
 
     push_watcher_log("Autonomous Channel Watcher Daemon stopped.")
+    set_watcher_progress(active=False, stage=0, stage_name="Stopped", step_detail="Daemon stopped.", percent=0)
 
 
 def start_watcher_daemon():

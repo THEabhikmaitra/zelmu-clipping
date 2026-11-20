@@ -53,6 +53,7 @@ from editor import (
 )
 from uploader import (
     upload_batch_private,
+    upload_single_clip_direct,
     get_authenticated_service,
     is_authenticated,
     get_channel_info,
@@ -82,7 +83,8 @@ from watcher import (
     is_watcher_running,
     start_watcher_daemon,
     stop_watcher_daemon,
-    get_watcher_logs
+    get_watcher_logs,
+    get_watcher_progress
 )
 
 # Ensure base directories exist
@@ -1177,15 +1179,41 @@ with tab1:
                     with st.expander("📋 View & Select Full Raw Log"):
                         st.text_area("Full Log", value="\n".join(full_logs), height=240, label_visibility="collapsed")
 
-    st.markdown("<div class='section-title'>READY CLIPS</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>🎬 STUDIO PREVIEW & INSTANT PUBLISH</div>", unsafe_allow_html=True)
+
+    # Auto-stop other videos when one plays (HTML/JS hook)
+    st.components.v1.html("""
+    <script>
+    const setupAutoStop = () => {
+        const vids = window.parent.document.querySelectorAll('video');
+        vids.forEach(v => {
+            if (!v._autoStopHooked) {
+                v._autoStopHooked = true;
+                v.addEventListener('play', () => {
+                    const all = window.parent.document.querySelectorAll('video');
+                    all.forEach(other => {
+                        if (other !== v && !other.paused) {
+                            other.pause();
+                        }
+                    });
+                });
+            }
+        });
+    };
+    setupAutoStop();
+    const mo = new MutationObserver(setupAutoStop);
+    mo.observe(window.parent.document.body, { childList: true, subtree: true });
+    </script>
+    """, height=0, width=0)
+
     ready_files = sorted(list(READY_DIR.glob("*.mp4")))
     
     col_hdr1, col_hdr2 = st.columns([3, 1])
     with col_hdr1:
         if ready_files:
-            st.caption(f"{len(ready_files)} clips in `{READY_DIR}`")
+            st.caption(f"📁 **{len(ready_files)} Ready Shorts** in `{READY_DIR}` | ⚡ Hardware accelerated (Intel QSV)")
     with col_hdr2:
-        if ready_files and st.button("Clear All", type="secondary", use_container_width=True):
+        if ready_files and st.button("🗑️ Clear All", type="secondary", use_container_width=True):
             for f in ready_files:
                 try:
                     f.unlink()
@@ -1194,24 +1222,75 @@ with tab1:
             st.rerun()
 
     if ready_files:
-        cols = st.columns(3)
+        # 2 cards per row for better readability & controls
+        cols = st.columns(2)
         for i, vid in enumerate(ready_files):
-            with cols[i % 3]:
-                st.caption(vid.name)
-                st.video(str(vid))
-                del_col1, del_col2 = st.columns([1, 1])
-                with del_col1:
+            with cols[i % 2]:
+                with st.container(border=True):
                     size_mb = vid.stat().st_size / (1024 * 1024)
-                    st.caption(f"{size_mb:.1f} MB")
-                with del_col2:
-                    if st.button("Delete", key=f"del_{i}", use_container_width=True):
-                        try:
-                            vid.unlink()
-                        except Exception:
-                            pass
-                        st.rerun()
+                    
+                    # Top Title & Specs
+                    st.markdown(f"**Clip #{i+1}: `{vid.name}`**")
+                    st.video(str(vid))
+                    
+                    # Specs Bar
+                    spec_c1, spec_c2, spec_c3 = st.columns([1, 1, 1])
+                    with spec_c1:
+                        st.caption(f"📦 **Size:** `{size_mb:.1f} MB`")
+                    with spec_c2:
+                        st.caption("📐 **Aspect:** `9:16`")
+                    with spec_c3:
+                        st.caption("⚡ **Codec:** `H.264 QSV`")
+
+                    # Editable YouTube Settings
+                    raw_stem = vid.stem.replace("_", " ")
+                    default_title = f"{raw_stem[:70]} #GTA6 #Shorts"
+                    e_title = st.text_input("📝 YouTube Title:", value=default_title, key=f"yt_title_{i}")
+                    
+                    with st.expander("⚙️ Editable YouTube Settings & Tags", expanded=False):
+                        e_desc = st.text_area(
+                            "Description:",
+                            value=f"Insane GTA 6 gameplay highlight moment. Subscribed for daily high-energy clips.\n\n#GTA6 #GrandTheftAuto6 #Shorts #Gaming",
+                            key=f"yt_desc_{i}",
+                            height=75
+                        )
+                        e_mode = st.selectbox(
+                            "Visibility & Publish Mode:",
+                            options=["Schedule (Next Peak CPM Slot) 🗓️", "Instant Public 🚀", "Private Draft 🔒"],
+                            key=f"yt_mode_{i}"
+                        )
+                        e_tags = st.text_input("Tags:", value="GTA6, GTA 6, GTA Shorts, Gaming", key=f"yt_tags_{i}")
+
+                    # Action buttons
+                    btn_c1, btn_c2 = st.columns([2.5, 1])
+                    with btn_c1:
+                        btn_label = "🗓️ Schedule Clip" if "Schedule" in e_mode else ("🚀 Publish Now" if "Instant" in e_mode else "🔒 Save Private")
+                        if st.button(btn_label, key=f"btn_up_{i}", type="primary", use_container_width=True):
+                            with st.spinner("Uploading to YouTube..."):
+                                try:
+                                    p_mode = "scheduled" if "Schedule" in e_mode else ("public" if "Instant" in e_mode else "private")
+                                    tag_list = [t.strip() for t in e_tags.split(",") if t.strip()]
+                                    res = upload_single_clip_direct(
+                                        file_path=vid,
+                                        title=e_title,
+                                        description=e_desc,
+                                        tags=tag_list,
+                                        privacy_mode=p_mode
+                                    )
+                                    st.success(f"✓ Uploaded! [Edit in YouTube Studio ↗]({res['studio_url']})")
+                                    time.sleep(1.0)
+                                    st.rerun()
+                                except Exception as u_err:
+                                    st.error(f"Upload failed: {u_err}")
+                    with btn_c2:
+                        if st.button("🗑️ Delete", key=f"del_{i}", use_container_width=True):
+                            try:
+                                vid.unlink()
+                            except Exception:
+                                pass
+                            st.rerun()
     else:
-        st.caption("No clips generated yet.")
+        st.caption("No clips generated yet. Paste a YouTube URL above and click 'Produce Shorts' to generate clips.")
 
 def get_client_id_info():
     """Reads configured OAuth client_id safely."""
@@ -1720,6 +1799,10 @@ with tab3:
                 st.rerun()
         else:
             if st.button("▶️ Start 24/7 Autopilot", type="primary", use_container_width=True):
+                # Ensure all entered channels are saved immediately before daemon starts
+                raw_chs = st.session_state.get("txt_watcher_channels", "")
+                if raw_chs.strip():
+                    watcher_cfg["channels"] = [c.strip() for c in raw_chs.splitlines() if c.strip()]
                 watcher_cfg["enabled"] = True
                 save_watcher_config(watcher_cfg)
                 start_watcher_daemon()
@@ -1732,13 +1815,14 @@ with tab3:
 
     with col_cfg_left:
         st.caption("TARGET CHANNELS TO MONITOR (One URL per line)")
-        current_channels = "\n".join(watcher_cfg.get("channels", []))
+        if "txt_watcher_channels" not in st.session_state:
+            st.session_state["txt_watcher_channels"] = "\n".join(watcher_cfg.get("channels", []))
         ch_input = st.text_area(
             "Monitored Channels",
-            value=current_channels,
             height=140,
             label_visibility="collapsed",
-            help="Enter YouTube channel video URLs or handles to watch (e.g. https://www.youtube.com/@RockstarGames/videos)"
+            help="Enter YouTube channel video URLs or handles to watch (e.g. https://www.youtube.com/@RockstarGames)",
+            key="txt_watcher_channels"
         )
 
     with col_cfg_right:
@@ -1746,7 +1830,7 @@ with tab3:
         poll_int = st.select_slider(
             "Polling Interval",
             options=[15, 30, 45, 60, 120],
-            value=watcher_cfg.get("check_interval_minutes", 30),
+            value=watcher_cfg.get("check_interval_minutes", 15),
             format_func=lambda x: f"Every {x} minutes"
         )
         shorts_n = st.slider("Shorts per New Video", min_value=2, max_value=8, value=watcher_cfg.get("shorts_per_video", 4))
@@ -1754,18 +1838,63 @@ with tab3:
         hook_bg = st.checkbox("🔥 Burn Frame-1 Viral Hook Badge", value=watcher_cfg.get("enable_hook_badge", True), help="Adds curiosity banner on frame 1 to maximize swipe-through CTR")
 
     if st.button("💾 Save Autopilot Configuration", use_container_width=True):
-        parsed_channels = [c.strip() for c in ch_input.splitlines() if c.strip()]
+        raw_chs = st.session_state.get("txt_watcher_channels", "")
+        parsed_channels = [c.strip() for c in raw_chs.splitlines() if c.strip()]
         watcher_cfg["channels"] = parsed_channels
         watcher_cfg["check_interval_minutes"] = poll_int
         watcher_cfg["shorts_per_video"] = shorts_n
         watcher_cfg["auto_upload"] = auto_up
         watcher_cfg["enable_hook_badge"] = hook_bg
         save_watcher_config(watcher_cfg)
-        st.success("Autopilot configuration saved!")
+        st.success(f"✓ Autopilot configuration saved! ({len(parsed_channels)} target channels registered)")
 
-    st.markdown("<div class='section-title'>AUTONOMOUS EVENT STREAM</div>", unsafe_allow_html=True)
-    w_logs = get_watcher_logs()
-    if w_logs:
-        st.code("\n".join(w_logs[-25:]), language="bash")
-    else:
-        st.caption("No watcher events recorded yet. Start autopilot to begin streaming channel checks.")
+    # Live Real-Time Autopilot Stage & Progress Telemetry (Auto-updates every 3s)
+    @st.fragment(run_every="3s")
+    def render_autopilot_live_telemetry():
+        prog = get_watcher_progress()
+        is_run = is_watcher_running()
+
+        pct = prog.get("percentage", 0)
+        status = prog.get("status", "idle")
+        stage_lbl = prog.get("stage_label", "Autopilot Idle")
+        detail = prog.get("step_detail", "Ready to monitor channels.")
+        next_step = prog.get("next_step", "Detecting new videos")
+        vid_title = prog.get("video_title", "")
+        ch_name = prog.get("channel_name", "")
+        cur_clip = prog.get("current_clip", 0)
+        tot_clips = prog.get("total_clips", 0)
+
+        st.markdown("<div class='section-title'>⚡ REAL-TIME AUTOPILOT PIPELINE PROGRESS</div>", unsafe_allow_html=True)
+
+        # Real Progress Bar
+        if is_run and status not in ("idle", "waiting"):
+            st.progress(min(1.0, max(0.0, pct / 100.0)), text=f"{stage_lbl} — {pct}% COMPLETE")
+        elif is_run and status == "waiting":
+            st.progress(1.0, text="✓ Cycle Finished — Waiting for next polling interval")
+        else:
+            st.progress(0.0, text="Autopilot Paused / Idle")
+
+        # Telemetry Cards
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric("Current Stage", stage_lbl, delta=f"{pct}% complete" if is_run and pct > 0 else None)
+        with m2:
+            display_title = f"{vid_title[:24]}..." if len(vid_title) > 24 else (vid_title or "No active video")
+            st.metric("Active Video", display_title, help=f"{vid_title} (@{ch_name})" if vid_title else None)
+        with m3:
+            clip_info = f" (Clip {cur_clip}/{tot_clips})" if tot_clips > 0 else ""
+            display_detail = f"{detail[:28]}..." if len(detail) > 28 else detail
+            st.metric("Current Step", display_detail, delta=clip_info if clip_info else None, help=detail)
+        with m4:
+            display_next = f"{next_step[:26]}..." if len(next_step) > 26 else next_step
+            st.metric("Next Step", display_next, help=next_step)
+
+        # Live Autonomous Event Stream
+        st.markdown("<div class='section-title'>AUTONOMOUS EVENT STREAM (LIVE 3S REFRESH)</div>", unsafe_allow_html=True)
+        w_logs = get_watcher_logs()
+        if w_logs:
+            st.code("\n".join(w_logs[-25:]), language="bash")
+        else:
+            st.caption("No watcher events recorded yet. Start autopilot to begin streaming channel checks.")
+
+    render_autopilot_live_telemetry()
