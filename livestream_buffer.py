@@ -225,8 +225,11 @@ def check_if_stream_live(target_url: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def get_live_hls_url(stream_watch_url: str) -> Optional[str]:
-    """Extracts direct HLS manifest .m3u8 from active YouTube live stream."""
+def get_live_hls_urls(stream_watch_url: str) -> Dict[str, Optional[str]]:
+    """
+    Extracts direct video and audio HLS manifests from active YouTube live stream.
+    Returns dict: {"video": video_url, "audio": audio_url}
+    """
     cmd = [
         *get_ytdlp_cmd(),
         "-g",
@@ -237,29 +240,65 @@ def get_live_hls_url(stream_watch_url: str) -> Optional[str]:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if proc.returncode == 0 and proc.stdout:
             lines = [l.strip() for l in proc.stdout.splitlines() if l.strip().startswith("http")]
-            if lines:
-                return lines[0]
+            if len(lines) >= 2:
+                return {"video": lines[0], "audio": lines[1]}
+            elif len(lines) == 1:
+                return {"video": lines[0], "audio": None}
     except Exception as e:
         push_live_log(f"HLS manifest error ({stream_watch_url}): {e}")
-    return None
+    return {"video": None, "audio": None}
 
 
-def capture_rolling_hls_slice(hls_url: str, output_path: Path, duration_sec: int = 300) -> Optional[Path]:
-    """Captures a rolling N-second slice from live HLS manifest."""
+def get_live_hls_url(stream_watch_url: str) -> Optional[str]:
+    """Extracts direct HLS manifest .m3u8 from active YouTube live stream."""
+    urls = get_live_hls_urls(stream_watch_url)
+    return urls.get("video")
+
+
+def capture_rolling_hls_slice(stream_input: Any, output_path: Path, duration_sec: int = 300) -> Optional[Path]:
+    """Captures a rolling N-second slice from live HLS manifests with full video and audio synchronization."""
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     part_path = output_path.with_suffix(".part.mp4")
 
+    if isinstance(stream_input, dict):
+        v_url = stream_input.get("video")
+        a_url = stream_input.get("audio")
+    else:
+        v_url = str(stream_input)
+        a_url = None
+
+    if not v_url:
+        return None
+
     ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
-    cmd = [
-        ffmpeg_bin, "-y",
-        "-i", hls_url,
-        "-t", str(duration_sec),
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "19",
-        "-c:a", "aac", "-b:a", "128k",
-        "-movflags", "+faststart",
-        str(part_path)
-    ]
+    if a_url:
+        cmd = [
+            ffmpeg_bin, "-y",
+            "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "3",
+            "-i", v_url,
+            "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "3",
+            "-i", a_url,
+            "-t", str(duration_sec),
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "19",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            str(part_path)
+        ]
+    else:
+        cmd = [
+            ffmpeg_bin, "-y",
+            "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "3",
+            "-i", v_url,
+            "-t", str(duration_sec),
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "19",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            str(part_path)
+        ]
+
     try:
         res = subprocess.run(cmd, capture_output=True, timeout=duration_sec + 60)
         if res.returncode == 0 and is_valid_video_file(part_path):
@@ -314,13 +353,13 @@ def process_livestream_slice(
     )
     push_live_log(f"🔴 [Stage 1/5] Extracting HLS stream for '{title}' (@{author})...")
 
-    hls_url = get_live_hls_url(stream_url)
-    if not hls_url:
+    hls_urls = get_live_hls_urls(stream_url)
+    if not hls_urls or not hls_urls.get("video"):
         push_live_log("Failed to acquire HLS manifest.")
         return []
 
     slice_mp4 = work_dir / "live_slice.mp4"
-    captured = capture_rolling_hls_slice(hls_url, slice_mp4, duration_sec=slice_duration)
+    captured = capture_rolling_hls_slice(hls_urls, slice_mp4, duration_sec=slice_duration)
     if not captured or not is_valid_video_file(captured):
         push_live_log("HLS capture failed or produced invalid container.")
         return []
@@ -342,11 +381,21 @@ def process_livestream_slice(
     transcript_json = work_dir / "02_transcript.json"
 
     ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
-    subprocess.run([
+    res_wav = subprocess.run([
         ffmpeg_bin, "-y", "-i", str(slice_mp4),
         "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
         str(audio_wav)
-    ], capture_output=True)
+    ], capture_output=True, text=True)
+
+    # Safeguard: if audio extraction failed, create ambient placeholder audio to prevent crash
+    if not audio_wav.exists() or audio_wav.stat().st_size < 1000:
+        push_live_log("⚠️ Live slice had no audio stream. Generating ambient placeholder audio.")
+        subprocess.run([
+            ffmpeg_bin, "-y",
+            "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono",
+            "-t", f"{slice_duration}",
+            str(audio_wav)
+        ], capture_output=True)
 
     transcript = transcribe_audio_whisper(audio_wav, transcript_json)
     if not transcript or not transcript.get("segments"):
