@@ -338,19 +338,20 @@ def transcribe_audio_whisper(
     if progress_callback:
         progress_callback(0, 0, f"Initializing faster-whisper model ({model_size} int8 CPU)...")
 
-    # Load model on CPU with int8 and 8 worker threads
-    model = WhisperModel(model_size, device="cpu", compute_type=compute_type, cpu_threads=8)
+    threads = min(16, os.cpu_count() or 8)
+    # Load model on CPU with int8 and max worker threads
+    model = WhisperModel(model_size, device="cpu", compute_type=compute_type, cpu_threads=threads)
     batched_model = BatchedInferencePipeline(model=model)
 
     if progress_callback:
-        progress_callback(0, 0, "Batched model loaded in RAM. Starting ultra-fast transcription...")
+        progress_callback(0, 0, f"Batched model loaded in RAM ({threads} threads). Starting turbo transcription...")
     
     segments, info = batched_model.transcribe(
         str(audio_path),
-        batch_size=8,
+        batch_size=16,
         word_timestamps=True,
         vad_filter=True,
-        vad_parameters=dict(min_silence_duration_ms=500)
+        vad_parameters=dict(min_silence_duration_ms=400)
     )
 
     transcript_data = {

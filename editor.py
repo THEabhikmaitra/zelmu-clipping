@@ -20,7 +20,7 @@ def get_best_video_encoder() -> List[str]:
     try:
         res_qsv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_qsv", "-f", "null", "-"], capture_output=True, timeout=6)
         if res_qsv.returncode == 0:
-            _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23"]
+            _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23", "-async_depth", "4", "-look_ahead", "0"]
             return _BEST_ENCODER_CACHE
         res_nv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, timeout=6)
         if res_nv.returncode == 0:
@@ -156,6 +156,65 @@ def check_internet_connection(timeout: float = 2.5) -> bool:
     return False
 
 
+def get_direct_stream_urls(url: str) -> Optional[tuple]:
+    """Extracts direct HTTPS video and audio playback stream URLs via yt-dlp in ~2s."""
+    cmd = [
+        *get_ytdlp_cmd(),
+        "-g",
+        "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]",
+        url
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
+        if proc.returncode == 0:
+            lines = [l.strip() for l in proc.stdout.splitlines() if l.strip().startswith("http")]
+            if len(lines) >= 2:
+                return (lines[0], lines[1])
+            elif len(lines) == 1:
+                return (lines[0], lines[0])
+    except Exception:
+        pass
+    return None
+
+
+def stream_video_section_fast(
+    url: str,
+    start_sec: float,
+    end_sec: float,
+    output_mp4_path: Path
+) -> Optional[Path]:
+    """Streams and cuts remote video in ~3-4s directly via FFmpeg Range requests without yt-dlp download wait."""
+    urls = get_direct_stream_urls(url)
+    if not urls:
+        return None
+
+    v_url, a_url = urls
+    ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
+    dur = max(1.0, end_sec - start_sec)
+
+    cmd = [
+        ffmpeg_bin, "-y",
+        "-ss", f"{start_sec:.2f}",
+        "-i", v_url,
+        "-ss", f"{start_sec:.2f}",
+        "-i", a_url,
+        "-t", f"{dur:.2f}",
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-c:v", "copy",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        str(output_mp4_path)
+    ]
+    try:
+        res = subprocess.run(cmd, capture_output=True, timeout=25)
+        if res.returncode == 0 and output_mp4_path.exists() and output_mp4_path.stat().st_size > 102400:
+            return output_mp4_path
+    except Exception:
+        pass
+    return None
+
+
 def download_video_section(
     url: str,
     start_sec: float,
@@ -165,14 +224,23 @@ def download_video_section(
     max_retries: int = 3
 ) -> Path:
     """
-    Downloads only the approved timestamp section via yt-dlp --download-sections.
-    Includes auto-retry and connection checking on network drops.
+    Downloads only the approved timestamp section.
+    Prioritizes ultra-fast zero-disk direct stream cut (~3s) before falling back to yt-dlp.
     """
     output_mp4_path = output_mp4_path.resolve()
     output_mp4_path.parent.mkdir(parents=True, exist_ok=True)
 
     if output_mp4_path.exists() and output_mp4_path.stat().st_size > 102400:
         return output_mp4_path
+
+    # Fast Path 1: Zero-disk direct stream seek cut in ~3s
+    if progress_callback:
+        progress_callback("⚡ Fast streaming remote section (Zero-Disk cut)...")
+    fast_cut = stream_video_section_fast(url, start_sec, end_sec, output_mp4_path)
+    if fast_cut:
+        if progress_callback:
+            progress_callback(f"✓ Fast stream cut complete: {output_mp4_path.name}")
+        return fast_cut
 
     ffmpeg_bin = get_ffmpeg_path()
     ffmpeg_loc_arg = []
@@ -291,13 +359,15 @@ def render_mode_a_short(
     split_layout: bool = False,
     facecam_position: str = "top-left",
     enable_tracking: bool = True,
-    logo_path: Optional[Path] = None
+    logo_path: Optional[Path] = None,
+    hook_title: Optional[str] = None
 ) -> Path:
     """
     Renders Mode A viral short:
     - Dynamic YOLOX-S player tracking (smooth 16:9 -> 9:16 pan) or micro-pacing center zoom.
     - 4-way facecam split layout.
     - Center safe-zone karaoke captions burned in.
+    - Frame-1 Viral Hook Badge (0.0s - 1.2s top curiosity banner for maximum swipe-through rate).
     - Optional channel logo/watermark overlay (top-right safe zone).
     - Profanity audio mute (0.4s).
     - Hardware acceleration: Intel QSV (350+ fps) or CPU fallback.
@@ -309,6 +379,18 @@ def render_mode_a_short(
     esc_sub = escape_ffmpeg_path(ass_subtitles)
 
     has_logo = logo_path and Path(logo_path).exists()
+
+    # Optional Frame-1 viral hook banner (first 1.2s to boost feed CTR)
+    hook_filter_str = ""
+    if hook_title:
+        clean_hook = re.sub(r"[^\w\s!?-]", "", hook_title)[:30].strip().upper()
+        if clean_hook:
+            font_title = get_windows_font("ariblk.ttf")
+            f_title_arg = f"fontfile='{font_title}':" if font_title else ""
+            hook_filter_str = (
+                f",drawtext={f_title_arg}text='⚡ {clean_hook}':fontsize=52:fontcolor=yellow:"
+                f"x=(w-text_w)/2:y=240:box=1:boxcolor=black@0.80:boxborderw=12:enable='between(t,0,1.2)'"
+            )
 
     tracking_keys = None
     if enable_tracking and not split_layout:
@@ -325,12 +407,14 @@ def render_mode_a_short(
             f"[0:v]crop=in_h*9/16:in_h:'{crop_x}':0,"
             f"scale=1080:1920,"
             f"subtitles='{esc_sub}'"
+            f"{hook_filter_str}"
         )
     elif not split_layout:
         base_filter = (
             f"[0:v]crop=in_h*9/16:in_h:(in_w-in_h*9/16)/2:0,"
             f"scale=1080:1920,"
             f"subtitles='{esc_sub}'"
+            f"{hook_filter_str}"
         )
     else:
         cam_coords = {
@@ -346,6 +430,7 @@ def render_mode_a_short(
             f"[game]crop=in_h*9/16:in_h:(in_w-in_h*9/16)/2:0,scale=1080:1248[bot];"
             f"[top][bot]vstack=inputs=2,"
             f"subtitles='{esc_sub}'"
+            f"{hook_filter_str}"
         )
 
     input_args = ["-hwaccel", "auto", "-i", str(source_video.resolve())]

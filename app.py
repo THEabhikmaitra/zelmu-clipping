@@ -60,6 +60,14 @@ from uploader import (
     READY_DIR,
     ARCHIVE_DIR
 )
+from watcher import (
+    load_watcher_config,
+    save_watcher_config,
+    is_watcher_running,
+    start_watcher_daemon,
+    stop_watcher_daemon,
+    get_watcher_logs
+)
 
 # Ensure base directories exist
 WORKSPACE_DIR = Path("workspace")
@@ -650,7 +658,7 @@ def render_labor_card(
     placeholder.markdown(html, unsafe_allow_html=True)
 
 # Instant Client-Side Tabs (Positioned inside Top Fixed Navbar beside logo)
-tab1, tab2 = st.tabs(["Produce", "Upload"])
+tab1, tab2, tab3 = st.tabs(["Produce", "Upload", "🤖 24/7 Autopilot Watcher"])
 
 with tab1:
     col_l, col_r = st.columns([1.6, 1])
@@ -677,8 +685,10 @@ with tab1:
         caption_style = "GTA Neon (Cyan/Pink)"
 
         enable_yolox = False
+        enable_hook_badge = True
         if "Mode A" in mode:
             enable_yolox = st.checkbox("Dynamic Player Tracking (YOLOX-S)", value=True, help="Follows player dynamically across 16:9 frame")
+            enable_hook_badge = st.checkbox("🔥 Frame-1 Viral Hook Badge", value=True, help="Burns dynamic curiosity banner into Frame 1 (first 1.2s) to maximize YouTube Shorts swipe-through rate")
             split_cam = st.checkbox("Facecam split (9:16)", value=False)
             if split_cam:
                 cam_position = st.selectbox(
@@ -978,7 +988,8 @@ with tab1:
                                 split_layout=split_cam,
                                 facecam_position=cam_position.lower() if split_cam else "top-left",
                                 enable_tracking=enable_yolox,
-                                logo_path=active_logo_path
+                                logo_path=active_logo_path,
+                                hook_title=cand.get("title", "GTA 6 MOMENT") if enable_hook_badge else None
                             )
                             push_log(f"✓ Rendered: {final_dest.name}")
                             return final_dest
@@ -1473,3 +1484,75 @@ with tab2:
                 st.rerun()
     else:
         st.caption("No upload history recorded yet.")
+
+with tab3:
+    st.markdown("<div class='section-title'>24/7 AUTONOMOUS CHANNEL WATCHER</div>", unsafe_allow_html=True)
+    watcher_cfg = load_watcher_config()
+    running = is_watcher_running()
+
+    # Status Banner
+    col_w_status, col_w_action = st.columns([2, 1])
+    with col_w_status:
+        if running:
+            st.success("🟢 **Autopilot Active:** Background daemon is monitoring channels for new GTA 6 uploads.")
+        else:
+            st.info("⚪ **Autopilot Idle:** Daemon is paused. Click 'Start 24/7 Autopilot' to monitor channels automatically.")
+
+    with col_w_action:
+        if running:
+            if st.button("⏹️ Stop Autopilot", type="secondary", use_container_width=True):
+                stop_watcher_daemon()
+                watcher_cfg["enabled"] = False
+                save_watcher_config(watcher_cfg)
+                st.rerun()
+        else:
+            if st.button("▶️ Start 24/7 Autopilot", type="primary", use_container_width=True):
+                watcher_cfg["enabled"] = True
+                save_watcher_config(watcher_cfg)
+                start_watcher_daemon()
+                st.rerun()
+
+    st.markdown("---")
+
+    # Config Grid
+    col_cfg_left, col_cfg_right = st.columns([1.5, 1])
+
+    with col_cfg_left:
+        st.caption("TARGET CHANNELS TO MONITOR (One URL per line)")
+        current_channels = "\n".join(watcher_cfg.get("channels", []))
+        ch_input = st.text_area(
+            "Monitored Channels",
+            value=current_channels,
+            height=140,
+            label_visibility="collapsed",
+            help="Enter YouTube channel video URLs or handles to watch (e.g. https://www.youtube.com/@RockstarGames/videos)"
+        )
+
+    with col_cfg_right:
+        st.caption("AUTOPILOT SETTINGS")
+        poll_int = st.select_slider(
+            "Polling Interval",
+            options=[15, 30, 45, 60, 120],
+            value=watcher_cfg.get("check_interval_minutes", 30),
+            format_func=lambda x: f"Every {x} minutes"
+        )
+        shorts_n = st.slider("Shorts per New Video", min_value=2, max_value=8, value=watcher_cfg.get("shorts_per_video", 4))
+        auto_up = st.checkbox("🎯 Auto-Schedule to YouTube Studio", value=watcher_cfg.get("auto_upload", True), help="Automatically queues and schedules newly extracted Shorts across daily peak High-CPM slots")
+        hook_bg = st.checkbox("🔥 Burn Frame-1 Viral Hook Badge", value=watcher_cfg.get("enable_hook_badge", True), help="Adds curiosity banner on frame 1 to maximize swipe-through CTR")
+
+    if st.button("💾 Save Autopilot Configuration", use_container_width=True):
+        parsed_channels = [c.strip() for c in ch_input.splitlines() if c.strip()]
+        watcher_cfg["channels"] = parsed_channels
+        watcher_cfg["check_interval_minutes"] = poll_int
+        watcher_cfg["shorts_per_video"] = shorts_n
+        watcher_cfg["auto_upload"] = auto_up
+        watcher_cfg["enable_hook_badge"] = hook_bg
+        save_watcher_config(watcher_cfg)
+        st.success("Autopilot configuration saved!")
+
+    st.markdown("<div class='section-title'>AUTONOMOUS EVENT STREAM</div>", unsafe_allow_html=True)
+    w_logs = get_watcher_logs()
+    if w_logs:
+        st.code("\n".join(w_logs[-25:]), language="bash")
+    else:
+        st.caption("No watcher events recorded yet. Start autopilot to begin streaming channel checks.")
