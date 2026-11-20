@@ -52,6 +52,7 @@ from editor import (
     render_mode_b_short,
     check_internet_connection
 )
+from trends_hunter import fetch_google_trends_us, search_trend_source_videos
 from uploader import (
     upload_batch_private,
     upload_single_clip_direct,
@@ -684,11 +685,12 @@ def render_labor_card(
     placeholder.markdown(html, unsafe_allow_html=True)
 
 # Instant Client-Side Tabs (Positioned inside Top Fixed Navbar beside logo)
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Produce",
     "Upload",
     "🤖 24/7 Channel Watcher (VODs)",
-    "🔴 Live Stream Clipper (HLS)"
+    "🔴 Live Stream Clipper (HLS)",
+    "🎯 Trend Hunter (USA 4h)"
 ])
 
 with tab1:
@@ -1985,3 +1987,68 @@ with tab4:
             st.caption("No livestream events recorded yet. Start live buffer to begin capturing HLS streams.")
 
     render_livestream_live_telemetry()
+
+with tab5:
+    st.markdown("<div class='section-title'>🎯 USA BREAKOUT TREND HUNTER (GOOGLE TRENDS 4H)</div>", unsafe_allow_html=True)
+    st.caption("Directly tracks `https://trends.google.com/trending?geo=US&status=active&hours=4&sort=recency`. Detects pre-peak search breakouts in the United States within the last 4 hours before they saturate, finds matching high-energy videos, and sends them directly to the Produce pipeline.")
+
+    col_t_params1, col_t_params2, col_t_params3, col_t_btn = st.columns([1, 1, 1, 1.2])
+    with col_t_params1:
+        trend_geo = st.selectbox("Geo Region", ["US", "GB", "CA", "AU"], index=0, key="trend_geo")
+    with col_t_params2:
+        trend_hours = st.selectbox("Time Window", [4, 24, 48], index=0, format_func=lambda x: f"Past {x} Hours", key="trend_hours")
+    with col_t_params3:
+        trend_sort = st.selectbox("Sort By", ["recency", "search-volume"], index=0, format_func=lambda x: "Recency (Newest Breakouts)" if x == "recency" else "Search Volume (Peak Traffic)", key="trend_sort")
+    with col_t_btn:
+        st.write("")
+        st.write("")
+        btn_scan_trends = st.button("🔥 Scan USA Breakout Trends", use_container_width=True, type="primary")
+
+    if btn_scan_trends or "cached_us_trends" not in st.session_state:
+        if btn_scan_trends or "cached_us_trends" not in st.session_state:
+            with st.spinner("Scraping live Google Trends parameters (geo=US, hours=4, sort=recency)..."):
+                scanned_trends = fetch_google_trends_us(geo=trend_geo, hours=trend_hours, sort=trend_sort)
+                st.session_state["cached_us_trends"] = scanned_trends
+                st.session_state["last_trends_scan_ts"] = datetime.datetime.now().strftime("%H:%M:%S")
+
+    trends_data = st.session_state.get("cached_us_trends", [])
+    scan_ts = st.session_state.get("last_trends_scan_ts", "")
+
+    if trends_data:
+        st.success(f"✓ Found **{len(trends_data)} active breakout trends** in {trend_geo} (Past {trend_hours} hours, sorted by {trend_sort}). Last scan: {scan_ts}")
+
+        # Niche filter
+        niche_col1, niche_col2 = st.columns([2, 1])
+        with niche_col1:
+            niche_keyword = st.text_input("Filter by Topic / Niche (optional):", value="", placeholder="e.g. gaming, gta, sports, viral, tech")
+        with niche_col2:
+            video_topic_suffix = st.text_input("YouTube Search Suffix:", value="gameplay", placeholder="e.g. gameplay, moments, reaction")
+
+        filtered_trends = trends_data
+        if niche_keyword.strip():
+            kw_low = niche_keyword.strip().lower()
+            filtered_trends = [t for t in trends_data if kw_low in t["query"].lower()]
+            st.caption(f"Showing {len(filtered_trends)} matching trends for '{niche_keyword}'")
+
+        for idx, tr in enumerate(filtered_trends[:25]):
+            with st.container():
+                c_q, c_v, c_act = st.columns([3, 1.2, 1.8])
+                with c_q:
+                    st.markdown(f"**#{idx+1} {tr['query'].upper()}**")
+                    st.caption(f"[📈 View Google Trends Graph]({tr['explore_url']})")
+                with c_v:
+                    st.metric("Velocity", tr["formatted_traffic"])
+                with c_act:
+                    if st.button(f"⚡ Find Videos & Send to Produce", key=f"btn_trend_{idx}"):
+                        with st.spinner(f"Searching YouTube videos for '{tr['query']}'..."):
+                            vids = search_trend_source_videos(tr['query'], max_results=3, topic_filter=video_topic_suffix)
+                            if vids:
+                                top_vid = vids[0]
+                                st.session_state["txt_raw_url"] = top_vid["url"]
+                                st.success(f"Selected: {top_vid['title']} ({top_vid['url']})! Switched to Tab 1.")
+                                st.rerun()
+                            else:
+                                st.warning("No recent YouTube videos found for this trend.")
+                st.divider()
+    else:
+        st.info("Click **[🔥 Scan USA Breakout Trends]** above to fetch live trending topics from Google Trends.")
