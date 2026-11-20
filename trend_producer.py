@@ -25,6 +25,7 @@ from editor import (
     stream_video_section_fast,
     download_video_section,
     get_best_video_encoder,
+    get_windows_font,
     is_valid_video_file
 )
 from uploader import upload_batch_private, is_authenticated
@@ -169,7 +170,8 @@ def create_solid_color_broll(output_path: Path, duration: float, is_vertical: bo
 def produce_trend_package(
     trend: Dict[str, Any],
     auto_upload: bool = True,
-    progress_callback: Optional[Any] = None
+    progress_callback: Optional[Any] = None,
+    status_callback: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     Produces full package from 1 trend:
@@ -191,7 +193,12 @@ def produce_trend_package(
             progress_callback(msg)
         print(f"[TrendProducer] {msg}")
 
+    def update_status(stg: int, stg_name: str, detail: str, pct: int, s_done: int = 0, v_done: int = 0):
+        if status_callback:
+            status_callback(query, stg, stg_name, detail, pct, s_done, v_done)
+
     log(f"🔥 Starting Trend Production for: '{query}'")
+    update_status(1, "Step 1/5: AI Scripts", f"Generating 6 Shorts scripts + 2 Landscape scripts for '{query}'...", 15, 0, 0)
 
     # Step 1: News & Scripts
     log("Step 1/5: Fetching recent news headlines & generating AI scripts...")
@@ -203,6 +210,7 @@ def produce_trend_package(
     landscapes_scripts = package_scripts.get("landscapes", [])[:2]
 
     # Step 2: Sourcing visual footage
+    update_status(2, "Step 2/5: Sourcing Footage", f"Sourcing background YouTube clips for '{query}'...", 25, 0, 0)
     log("Step 2/5: Sourcing YouTube background clips for trend visuals...")
     yt_videos = search_trend_source_videos(query, max_results=2)
     source_clip_vertical = None
@@ -230,6 +238,7 @@ def produce_trend_package(
     rendered_landscapes = []
 
     # Step 3: Render 6 Reels (9:16) in Parallel
+    update_status(3, "Step 3/5: Rendering Reels", f"Synthesizing voiceovers & rendering 6 Shorts in parallel...", 35, 0, 0)
     log(f"Step 3/5: Synthesizing voiceovers & rendering 6 Shorts in parallel...")
 
     def render_single_reel(r_idx: int, item: dict) -> Optional[Path]:
@@ -251,7 +260,6 @@ def produce_trend_package(
         final_mp4 = READY_DIR / f"Short_{safe_q}_{r_idx+1}_{ts}.mp4"
 
         # Combine video + Piper TTS + Karaoke captions via Mode A
-        # Cut visual section to exact voiceover duration
         cut_vis = work_dir / f"vis_short_{r_idx}.mp4"
         subprocess.run([
             "ffmpeg", "-y",
@@ -284,17 +292,25 @@ def produce_trend_package(
         cut_vis.unlink(missing_ok=True)
         return final_mp4
 
+    total_shorts_count = len(shorts_scripts)
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
         fut_map = {pool.submit(render_single_reel, idx, item): idx for idx, item in enumerate(shorts_scripts)}
         for fut in concurrent.futures.as_completed(fut_map):
             res_p = fut.result()
             if res_p and res_p.exists() and res_p.stat().st_size > 102400:
                 rendered_shorts.append(res_p)
+                done_cnt = len(rendered_shorts)
+                step_pct = 35 + int((done_cnt / max(1, total_shorts_count)) * 35)
+                update_status(3, f"Step 3/5: Rendering Reels ({done_cnt}/{total_shorts_count})", f"Rendered Reel {done_cnt}/{total_shorts_count}: '{res_p.name}' via Intel QSV...", step_pct, done_cnt, 0)
                 log(f"✓ Rendered Short: {res_p.name}")
 
     # Step 4: Render 2 Landscape Videos (16:9)
+    update_status(4, "Step 4/5: Rendering Landscape", "Synthesizing voiceovers & rendering 2 Landscape videos...", 72, len(rendered_shorts), 0)
     log(f"Step 4/5: Synthesizing voiceovers & rendering 2 Landscape videos...")
     ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
+    font_f = get_windows_font("ariblk.ttf")
+    f_arg = f"fontfile='{font_f}':" if font_f else ""
+    clean_header = "".join(c for c in query.upper() if c.isalnum() or c.isspace())[:30]
 
     for l_idx, l_item in enumerate(landscapes_scripts):
         l_title = l_item.get("title", f"{query} Breakdown {l_idx+1}")
@@ -307,18 +323,17 @@ def produce_trend_package(
         final_land_mp4 = READY_DIR / f"Video_{safe_q}_{l_idx+1}_{ts}.mp4"
 
         # Render 16:9 Landscape Video with looped visual background + audio ducking
+        vf_filter = (
+            f"scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
+            f"drawtext={f_arg}text='{clean_header} BREAKDOWN':fontsize=42:fontcolor=white:box=1:boxcolor=black@0.75:x=(w-text_w)/2:y=80"
+        )
         land_cmd = [
             ffmpeg_bin, "-y",
             "-stream_loop", "-1",
             "-i", str(source_clip_landscape),
             "-i", str(wav_path),
             "-t", f"{dur:.2f}",
-            "-filter_complex", (
-                f"[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
-                f"drawtext=text='{query.upper()} BREAKDOWN':fontsize=42:fontcolor=white:box=1:boxcolor=black@0.75:x=(w-text_w)/2:y=80[v]"
-            ),
-            "-map", "[v]",
-            "-map", "1:a:0",
+            "-vf", vf_filter,
             *get_best_video_encoder(),
             "-c:a", "aac",
             "-b:a", "192k",
@@ -327,15 +342,20 @@ def produce_trend_package(
         res = subprocess.run(land_cmd, capture_output=True)
         if res.returncode == 0 and is_valid_video_file(final_land_mp4):
             rendered_landscapes.append(final_land_mp4)
+            v_done_cnt = len(rendered_landscapes)
+            l_pct = 72 + int((v_done_cnt / 2) * 18)
+            update_status(4, f"Step 4/5: Rendering Landscape ({v_done_cnt}/2)", f"Rendered Landscape Video {v_done_cnt}/2: '{final_land_mp4.name}'...", l_pct, len(rendered_shorts), v_done_cnt)
             log(f"✓ Rendered Landscape Video: {final_land_mp4.name}")
 
     # Step 5: Auto-Schedule to Studio
     all_rendered = rendered_shorts + rendered_landscapes
     upload_results = []
     if auto_upload and all_rendered and is_authenticated():
+        update_status(5, "Step 5/5: Studio Scheduling", f"Auto-scheduling {len(all_rendered)} assets across peak monetization slots...", 92, len(rendered_shorts), len(rendered_landscapes))
         log(f"Step 5/5: Auto-scheduling {len(all_rendered)} assets ({len(rendered_shorts)} Shorts + {len(rendered_landscapes)} Videos) across peak monetization slots...")
-        upload_results = upload_batch_private(all_rendered, progress_callback=log)
+        upload_results = upload_batch_private(max_batch_size=len(all_rendered), auto_schedule=True, log_callback=log)
 
+    update_status(5, "Completed", f"Successfully produced {len(rendered_shorts)} Reels + {len(rendered_landscapes)} Videos for '{query}'.", 100, len(rendered_shorts), len(rendered_landscapes))
     log(f"🎉 Completed! Generated {len(rendered_shorts)} Shorts + {len(rendered_landscapes)} Landscape Videos from '{query}'.")
     return {
         "query": query,

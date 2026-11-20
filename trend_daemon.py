@@ -196,22 +196,26 @@ def daemon_loop():
             t_growth = target_trend.get("growth_pct", "")
             push_daemon_log(f"🔥 NEW BREAKOUT DETECTED: '{t_query}' ({t_vol} {t_growth})")
 
-            set_daemon_progress(
-                active=True,
-                current_trend=t_query,
-                stage=2,
-                total_stages=5,
-                stage_name="Producing 8 Assets",
-                step_detail=f"Producing 6 Reels + 2 Landscape Videos for '{t_query}'...",
-                next_step="Studio Monetization Scheduling",
-                percent=40
-            )
+            def update_status(cur_q, stg, stg_name, detail, pct, s_done, v_done):
+                set_daemon_progress(
+                    active=True,
+                    current_trend=cur_q,
+                    stage=stg,
+                    total_stages=5,
+                    stage_name=stg_name,
+                    step_detail=detail,
+                    next_step="Studio Scheduling" if stg < 5 else "Next Polling Cycle",
+                    percent=pct,
+                    shorts_done=s_done,
+                    videos_done=v_done
+                )
 
             try:
                 res = produce_trend_package(
                     target_trend,
                     auto_upload=auto_up,
-                    progress_callback=lambda m: push_daemon_log(f"[{t_query}] {m}")
+                    progress_callback=lambda m: push_daemon_log(f"[{t_query}] {m}"),
+                    status_callback=update_status
                 )
 
                 # Record in state
