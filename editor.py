@@ -541,17 +541,19 @@ def render_mode_a_short(
     if enable_anti_content_id:
         audio_chain.append("asetrate=44100*1.003,atempo=1/1.003")
 
-    cur_audio = "[0:a]"
+    cur_audio = "0:a"
     if audio_chain:
-        fc_parts.append(f"{cur_audio}{','.join(audio_chain)}[a_base]")
+        fc_parts.append(f"[{cur_audio}]{','.join(audio_chain)}[a_base]")
         cur_audio = "[a_base]"
 
     if has_sfx:
-        fc_parts.append(f"{cur_audio}[{sfx_idx}:a]amix=inputs=2:duration=first:dropout_transition=0[a_sfx]")
+        in_aud = cur_audio if cur_audio.startswith("[") else f"[{cur_audio}]"
+        fc_parts.append(f"{in_aud}[{sfx_idx}:a]amix=inputs=2:duration=first:dropout_transition=0[a_sfx]")
         cur_audio = "[a_sfx]"
 
     if has_music:
-        fc_parts.append(f"[{music_idx}:a]volume=0.18[m_duck];{cur_audio}[m_duck]amix=inputs=2:duration=first:dropout_transition=2[a_final]")
+        in_aud = cur_audio if cur_audio.startswith("[") else f"[{cur_audio}]"
+        fc_parts.append(f"[{music_idx}:a]volume=0.18[m_duck];{in_aud}[m_duck]amix=inputs=2:duration=first:dropout_transition=2[a_final]")
         cur_audio = "[a_final]"
 
     filter_complex_str = ";".join(fc_parts)
