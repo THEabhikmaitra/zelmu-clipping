@@ -14,18 +14,31 @@ from typing import List, Dict, Any, Optional
 from transcriber import get_ytdlp_cmd
 
 
+CATEGORIES = {
+    "all": {"label": "🌐 All Categories", "cat_id": 0, "default_suffix": ""},
+    "entertainment": {"label": "🎬 Entertainment & Pop Culture", "cat_id": 3, "default_suffix": "reaction"},
+    "sports": {"label": "⚽ Sports & Highlights", "cat_id": 20, "default_suffix": "highlights"},
+    "gaming": {"label": "🎮 Gaming & Esports", "cat_id": 8, "default_suffix": "gameplay"},
+    "news": {"label": "📰 News & Politics", "cat_id": 16, "default_suffix": "news"},
+    "tech": {"label": "💻 Tech & Science", "cat_id": 5, "default_suffix": "explained"},
+    "business": {"label": "📈 Business & Finance", "cat_id": 7, "default_suffix": ""}
+}
+
+
 def fetch_google_trends_us(
     geo: str = "US",
     hours: int = 4,
     sort: str = "recency",
-    status: str = "active"
+    status: str = "active",
+    category_id: int = 0
 ) -> List[Dict[str, Any]]:
     """
-    Fetches real-time breakout trends from Google Trends Trending Now:
+    Fetches real-time breakout trends across All Categories or specific category from:
     https://trends.google.com/trending?geo=US&status=active&hours=4&sort=recency
     Parses native ds:0 payload directly. 0 API keys required.
     """
-    url = f"https://trends.google.com/trending?geo={geo}&status={status}&hours={hours}&sort={sort}"
+    cat_param = f"&cat={category_id}" if category_id and category_id > 0 else ""
+    url = f"https://trends.google.com/trending?geo={geo}&status={status}&hours={hours}&sort={sort}{cat_param}"
     req = urllib.request.Request(url, headers={
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9"

@@ -52,7 +52,7 @@ from editor import (
     render_mode_b_short,
     check_internet_connection
 )
-from trends_hunter import fetch_google_trends_us, search_trend_source_videos
+from trends_hunter import fetch_google_trends_us, search_trend_source_videos, CATEGORIES
 from uploader import (
     upload_batch_private,
     upload_single_clip_direct,
@@ -1992,22 +1992,27 @@ with tab5:
     st.markdown("<div class='section-title'>🎯 USA BREAKOUT TREND HUNTER (GOOGLE TRENDS 4H)</div>", unsafe_allow_html=True)
     st.caption("Directly tracks `https://trends.google.com/trending?geo=US&status=active&hours=4&sort=recency`. Detects pre-peak search breakouts in the United States within the last 4 hours before they saturate, finds matching high-energy videos, and sends them directly to the Produce pipeline.")
 
-    col_t_params1, col_t_params2, col_t_params3, col_t_btn = st.columns([1, 1, 1, 1.2])
+    col_t_params1, col_t_params2, col_t_params3, col_t_params4, col_t_btn = st.columns([0.9, 0.9, 1.1, 1.5, 1.3])
     with col_t_params1:
         trend_geo = st.selectbox("Geo Region", ["US", "GB", "CA", "AU"], index=0, key="trend_geo")
     with col_t_params2:
         trend_hours = st.selectbox("Time Window", [4, 24, 48], index=0, format_func=lambda x: f"Past {x} Hours", key="trend_hours")
     with col_t_params3:
-        trend_sort = st.selectbox("Sort By", ["recency", "search-volume"], index=0, format_func=lambda x: "Recency (Newest Breakouts)" if x == "recency" else "Search Volume (Peak Traffic)", key="trend_sort")
+        trend_sort = st.selectbox("Sort By", ["recency", "search-volume"], index=0, format_func=lambda x: "Recency (Breakouts)" if x == "recency" else "Search Volume", key="trend_sort")
+    with col_t_params4:
+        cat_keys = list(CATEGORIES.keys())
+        sel_cat_key = st.selectbox("Category", cat_keys, index=0, format_func=lambda k: CATEGORIES[k]["label"], key="trend_cat")
+        sel_cat_id = CATEGORIES[sel_cat_key]["cat_id"]
+        cat_default_suffix = CATEGORIES[sel_cat_key]["default_suffix"]
     with col_t_btn:
         st.write("")
         st.write("")
-        btn_scan_trends = st.button("🔥 Scan USA Breakout Trends", use_container_width=True, type="primary")
+        btn_scan_trends = st.button("🔥 Scan Breakout Trends", use_container_width=True, type="primary")
 
     if btn_scan_trends or "cached_us_trends" not in st.session_state:
         if btn_scan_trends or "cached_us_trends" not in st.session_state:
-            with st.spinner("Scraping live Google Trends parameters (geo=US, hours=4, sort=recency)..."):
-                scanned_trends = fetch_google_trends_us(geo=trend_geo, hours=trend_hours, sort=trend_sort)
+            with st.spinner(f"Scraping live Google Trends ({CATEGORIES[sel_cat_key]['label']}, geo={trend_geo}, hours={trend_hours})..."):
+                scanned_trends = fetch_google_trends_us(geo=trend_geo, hours=trend_hours, sort=trend_sort, category_id=sel_cat_id)
                 st.session_state["cached_us_trends"] = scanned_trends
                 st.session_state["last_trends_scan_ts"] = datetime.datetime.now().strftime("%H:%M:%S")
 
@@ -2015,14 +2020,14 @@ with tab5:
     scan_ts = st.session_state.get("last_trends_scan_ts", "")
 
     if trends_data:
-        st.success(f"✓ Found **{len(trends_data)} active breakout trends** in {trend_geo} (Past {trend_hours} hours, sorted by {trend_sort}). Last scan: {scan_ts}")
+        st.success(f"✓ Found **{len(trends_data)} active breakout trends** across **{CATEGORIES[sel_cat_key]['label']}** in {trend_geo} (Past {trend_hours}h). Last scan: {scan_ts}")
 
         # Niche filter
         niche_col1, niche_col2 = st.columns([2, 1])
         with niche_col1:
-            niche_keyword = st.text_input("Filter by Topic / Niche (optional):", value="", placeholder="e.g. gaming, gta, sports, viral, tech")
+            niche_keyword = st.text_input("Filter by Topic / Keyword (optional):", value="", placeholder="e.g. any keyword, sports, celebrity, gaming")
         with niche_col2:
-            video_topic_suffix = st.text_input("YouTube Search Suffix:", value="gameplay", placeholder="e.g. gameplay, moments, reaction")
+            video_topic_suffix = st.text_input("YouTube Search Suffix (leave empty for broad search):", value=cat_default_suffix, placeholder="e.g. leave empty or gameplay/reaction/moments")
 
         filtered_trends = trends_data
         if niche_keyword.strip():
