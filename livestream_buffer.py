@@ -8,6 +8,8 @@ import os
 import sys
 import time
 import json
+import re
+import shutil
 import subprocess
 import threading
 import concurrent.futures
@@ -21,9 +23,16 @@ from transcriber import (
     extract_audio_wav,
     transcribe_audio_whisper
 )
-from analyzer import extract_candidates_full, extract_top_speech_windows
+from analyzer import extract_candidates_full, extract_top_speech_windows, detect_live_hyped_windows
 from editor import generate_karaoke_ass, render_mode_a_short, check_internet_connection, is_valid_video_file
 from uploader import upload_batch_private, calculate_monetization_schedule_slots, is_authenticated
+from arbiter import (
+    acquire_compute_lock,
+    release_compute_lock,
+    is_system_paused,
+    push_unified_log,
+    PRIORITY_LIVE
+)
 
 CONFIG_FILE = Path("livestream_config.json")
 STATE_FILE = Path("livestream_state.json")
@@ -73,6 +82,7 @@ def push_live_log(msg: str):
     import datetime
     now_str = datetime.datetime.now().strftime("%H:%M:%S")
     entry = f"[{now_str}] {msg}"
+    push_unified_log("LIVE", msg)
     with _LIVE_LOCK:
         _LIVE_LOGS.append(entry)
         if len(_LIVE_LOGS) > 200:
@@ -366,137 +376,176 @@ def process_livestream_slice(
 
     push_live_log(f"✓ [Stage 1/5] Captured {slice_duration}s live slice ({slice_mp4.stat().st_size / 1024 / 1024:.1f} MB).")
 
-    # Stage 2: Audio & Transcription
-    set_livestream_progress(
-        status="transcribing",
-        current_step=2,
-        total_steps=5,
-        percentage=30,
-        stage_label="Stage 2/5: Live Audio AI",
-        step_detail="Extracting live audio & running Whisper turbo transcription...",
-        next_step="Stage 3/5: Spike Detection & Viral Moment Extraction"
-    )
-    push_live_log("🎙️ [Stage 2/5] Running Whisper turbo transcription on live audio slice...")
-    audio_wav = work_dir / "01_audio.wav"
-    transcript_json = work_dir / "02_transcript.json"
+    # Stage 2 to Stage 4: Heavy Compute (Whisper AI + Intel QSV) protected by Arbiter Compute Lock
+    push_live_log("Waiting for Compute Lock (P2) to run Whisper AI & QSV Render...")
+    acquire_compute_lock("livestream_buffer", PRIORITY_LIVE, f"Live: {title[:25]}", timeout=600.0)
+    try:
+        # Stage 2: Audio & Transcription
+        set_livestream_progress(
+            status="transcribing",
+            current_step=2,
+            total_steps=5,
+            percentage=30,
+            stage_label="Stage 2/5: Live Audio AI",
+            step_detail="Extracting live audio & running Whisper turbo transcription...",
+            next_step="Stage 3/5: Spike Detection & Viral Moment Extraction"
+        )
+        push_live_log("🎙️ [Stage 2/5] Running Whisper turbo transcription on live audio slice...")
+        audio_wav = work_dir / "01_audio.wav"
+        transcript_json = work_dir / "02_transcript.json"
 
-    ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
-    res_wav = subprocess.run([
-        ffmpeg_bin, "-y", "-i", str(slice_mp4),
-        "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-        str(audio_wav)
-    ], capture_output=True, text=True)
-
-    # Safeguard: if audio extraction failed, create ambient placeholder audio to prevent crash
-    if not audio_wav.exists() or audio_wav.stat().st_size < 1000:
-        push_live_log("⚠️ Live slice had no audio stream. Generating ambient placeholder audio.")
-        subprocess.run([
-            ffmpeg_bin, "-y",
-            "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono",
-            "-t", f"{slice_duration}",
+        ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
+        res_wav = subprocess.run([
+            ffmpeg_bin, "-y", "-i", str(slice_mp4),
+            "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
             str(audio_wav)
-        ], capture_output=True)
+        ], capture_output=True, text=True)
 
-    transcript = transcribe_audio_whisper(audio_wav, transcript_json)
-    if not transcript or not transcript.get("segments"):
-        push_live_log("No speech detected in live slice. Using acoustic energy fallback...")
+        # Safeguard: if audio extraction failed, create ambient placeholder audio to prevent crash
+        if not audio_wav.exists() or audio_wav.stat().st_size < 1000:
+            push_live_log("⚠️ Live slice had no audio stream. Generating ambient placeholder audio.")
+            subprocess.run([
+                ffmpeg_bin, "-y",
+                "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono",
+                "-t", f"{slice_duration}",
+                str(audio_wav)
+            ], capture_output=True)
 
-    # Stage 3: Candidate Spike Detection
-    set_livestream_progress(
-        status="analyzing",
-        current_step=3,
-        total_steps=5,
-        percentage=45,
-        stage_label="Stage 3/5: Spike Detection",
-        step_detail=f"Detecting top {shorts_count} viral moments from live stream...",
-        next_step="Stage 4/5: Vertical Short Hardware Render"
-    )
-    push_live_log(f"⚡ [Stage 3/5] Detecting top {shorts_count} excitement windows...")
+        transcript = transcribe_audio_whisper(audio_wav, transcript_json)
+        if not transcript or not transcript.get("segments"):
+            push_live_log("No speech detected in live slice. Using acoustic energy fallback...")
 
-    windows = extract_top_speech_windows(transcript, target_clips=shorts_count, min_duration=25.0, max_duration=45.0)
-    if not windows:
-        windows = [{"start": 0.0, "end": 35.0, "title": "INSANE LIVE STREAM MOMENT"}]
+        # Stage 3: Candidate Spike Detection
+        # Stage 3: Candidate Spike & Hyped Area Detection (Acoustic RMS + 2-4kHz Shouts + Speech Velocity)
+        set_livestream_progress(
+            status="analyzing",
+            current_step=3,
+            total_steps=5,
+            percentage=45,
+            stage_label="Stage 3/5: Hyped Area Detection",
+            step_detail=f"Scanning audio RMS & speech velocity for top {shorts_count} hyped areas...",
+            next_step="Stage 4/5: Vertical Short Hardware Render"
+        )
+        push_live_log(f"⚡ [Stage 3/5] Detecting top {shorts_count} hyped areas (acoustic RMS energy + speech velocity)...")
 
-    rendered_files = []
-    style_key = "neon" if "neon" in caption_style.lower() else ("clean" if "clean" in caption_style.lower() else "karaoke")
+        windows = detect_live_hyped_windows(
+            audio_path=audio_wav if audio_wav.exists() else None,
+            transcript=transcript,
+            target_clips=shorts_count,
+            min_duration=26.0,
+            max_duration=42.0,
+            stream_title=title,
+            channel_name=author,
+            total_duration=float(slice_duration)
+        )
+        if not windows:
+            windows = [{"start": 0.0, "end": 35.0, "title": f"{author} - Insane Live Moment", "hype_score": 75}]
 
-    # Stage 4: Parallel QSV Rendering
-    candidates = windows[:shorts_count]
-    rendered_files = []
-    from editor import find_profanities_in_words
+        for idx, w in enumerate(windows):
+            push_live_log(f"🔥 [Stage 3/5] Hyped Area #{idx+1}: {w['start']:.1f}s - {w['end']:.1f}s ({w['duration']:.1f}s, Hype: {w.get('hype_score', 0)}%) -> '{w.get('title')}'")
 
-    def process_live_short(c_idx: int, win: dict):
-        start_t = win["start"]
-        end_t = win["end"]
-        clip_title = win.get("title", f"Live_Moment_{c_idx+1}")
-        clean_name = f"Live_{author}_{slice_ts}_{c_idx+1}"
-        final_dest = READY_DIR / f"{clean_name}.mp4"
+        style_key = "neon" if "neon" in caption_style.lower() else ("clean" if "clean" in caption_style.lower() else "karaoke")
 
-        if final_dest.exists() and final_dest.stat().st_size > 102400:
+        # Stage 4: Parallel QSV Rendering
+        candidates = windows[:shorts_count]
+        from editor import find_profanities_in_words
+
+        def process_live_short(c_idx: int, win: dict):
+            start_t = win["start"]
+            end_t = win["end"]
+            clip_title = win.get("title", f"Live_Moment_{c_idx+1}")
+            clean_name = f"Live_{author}_{slice_ts}_{c_idx+1}"
+            final_dest = READY_DIR / f"{clean_name}.mp4"
+
+            if final_dest.exists() and final_dest.stat().st_size > 102400:
+                return final_dest
+
+            raw_seg = segments_dir / f"live_seg_{c_idx}.mp4"
+            dur = max(1.0, end_t - start_t)
+            subprocess.run([
+                ffmpeg_bin, "-y",
+                "-ss", f"{start_t:.2f}",
+                "-i", str(slice_mp4),
+                "-t", f"{dur:.2f}",
+                "-c", "copy",
+                str(raw_seg)
+            ], capture_output=True)
+
+            if not is_valid_video_file(raw_seg):
+                return None
+
+            seg_words = []
+            for s in transcript.get("segments", []):
+                for w in s.get("words", []):
+                    if start_t <= w["start"] <= end_t:
+                        seg_words.append(w)
+
+            ass_file = segments_dir / f"live_subs_{c_idx}.ass"
+            generate_karaoke_ass(seg_words, ass_file, clip_start_offset=start_t, style_preset=style_key)
+
+            flagged = find_profanities_in_words(seg_words)
+
+            render_mode_a_short(
+                source_video=raw_seg,
+                ass_subtitles=ass_file,
+                output_short_path=final_dest,
+                flagged_profanities=flagged,
+                split_layout=False,
+                enable_tracking=enable_tracking,
+                hook_title="🔴 LIVE HIGHLIGHT" if enable_hook_badge else None
+            )
+            push_live_log(f"✓ [Stage 4/5] Rendered Live Short: {final_dest.name} (Hype {win.get('hype_score', 0)}%)")
+            raw_seg.unlink(missing_ok=True)
+            for p in segments_dir.glob(f"live_seg_{c_idx}.*"):
+                p.unlink(missing_ok=True)
+
+            # Generate sidecar metadata JSON for YouTube Studio (Live-specific)
+            sidecar_p = final_dest.with_suffix(".json")
+            try:
+                clean_tag_author = re.sub(r'[^a-zA-Z0-9]', '', author)
+                with open(sidecar_p, "w", encoding="utf-8") as sf:
+                    json.dump({
+                        "title": f"{clip_title} #Shorts",
+                        "description": (
+                            f"🔴 {clip_title}\n\n"
+                            f"Best live streaming highlights from {author}!\n"
+                            f"Stream: {title}\n\n"
+                            f"Subscribe to @zelmuesports for non-stop live gaming moments & clips!\n\n"
+                            f"#Shorts #{clean_tag_author} #LiveStream #Highlights #Gaming"
+                        ),
+                        "tags": ["Shorts", author, "LiveStream", "Highlights", "Gaming", "Viral"],
+                        "category_id": "20",  # Gaming
+                        "privacy_status": "private"
+                    }, sf, indent=2)
+            except Exception:
+                pass
+
             return final_dest
 
-        raw_seg = segments_dir / f"live_seg_{c_idx}.mp4"
-        dur = max(1.0, end_t - start_t)
-        subprocess.run([
-            ffmpeg_bin, "-y",
-            "-ss", f"{start_t:.2f}",
-            "-i", str(slice_mp4),
-            "-t", f"{dur:.2f}",
-            "-c", "copy",
-            str(raw_seg)
-        ], capture_output=True)
-
-        if not is_valid_video_file(raw_seg):
-            return None
-
-        seg_words = []
-        for s in transcript.get("segments", []):
-            for w in s.get("words", []):
-                if start_t <= w["start"] <= end_t:
-                    seg_words.append(w)
-
-        ass_file = segments_dir / f"live_subs_{c_idx}.ass"
-        generate_karaoke_ass(seg_words, ass_file, clip_start_offset=start_t, style_preset=style_key)
-
-        flagged = find_profanities_in_words(seg_words)
-
-        render_mode_a_short(
-            source_video=raw_seg,
-            ass_subtitles=ass_file,
-            output_short_path=final_dest,
-            flagged_profanities=flagged,
-            split_layout=False,
-            enable_tracking=enable_tracking,
-            hook_title="🔴 LIVE HIGHLIGHT" if enable_hook_badge else None
-        )
-        push_live_log(f"✓ [Stage 4/5] Rendered Live Short: {final_dest.name}")
-        raw_seg.unlink(missing_ok=True)
-        for p in segments_dir.glob(f"live_seg_{c_idx}.*"):
-            p.unlink(missing_ok=True)
-        return final_dest
-
-    pool_workers = min(3, max(1, len(candidates)))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=pool_workers) as pool:
-        future_map = {pool.submit(process_live_short, c_idx, win): c_idx for c_idx, win in enumerate(candidates)}
-        while any(not fut.done() for fut in future_map):
-            time.sleep(1)
-            done_count = sum(1 for fut in future_map if fut.done())
-            rnd_pct = 50 + int((done_count / max(1, len(candidates))) * 35)
-            set_livestream_progress(
-                status="rendering",
-                current_step=4,
-                total_steps=5,
-                percentage=rnd_pct,
-                stage_label=f"Stage 4/5: Parallel QSV Rendering ({done_count}/{len(candidates)})",
-                step_detail=f"Rendering {done_count}/{len(candidates)} live clips via Intel QSV...",
-                next_step="Stage 5/5: Auto-Schedule to Studio",
-                current_clip=done_count,
-                total_clips=len(candidates)
-            )
-        for fut in future_map:
-            res_dest = fut.result()
-            if res_dest and res_dest.exists() and res_dest.stat().st_size > 102400:
-                rendered_files.append(res_dest)
+        pool_workers = min(3, max(1, len(candidates)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=pool_workers) as pool:
+            future_map = {pool.submit(process_live_short, c_idx, win): c_idx for c_idx, win in enumerate(candidates)}
+            while any(not fut.done() for fut in future_map):
+                time.sleep(1)
+                done_count = sum(1 for fut in future_map if fut.done())
+                rnd_pct = 50 + int((done_count / max(1, len(candidates))) * 35)
+                set_livestream_progress(
+                    status="rendering",
+                    current_step=4,
+                    total_steps=5,
+                    percentage=rnd_pct,
+                    stage_label=f"Stage 4/5: Parallel QSV Rendering ({done_count}/{len(candidates)})",
+                    step_detail=f"Rendering {done_count}/{len(candidates)} live clips via Intel QSV...",
+                    next_step="Stage 5/5: Auto-Schedule to Studio",
+                    current_clip=done_count,
+                    total_clips=len(candidates)
+                )
+            for fut in future_map:
+                res_dest = fut.result()
+                if res_dest and res_dest.exists() and res_dest.stat().st_size > 102400:
+                    rendered_files.append(res_dest)
+    finally:
+        release_compute_lock("livestream_buffer")
 
     # Stage 5: Upload / Schedule
     if auto_upload and rendered_files and is_authenticated():
@@ -515,7 +564,10 @@ def process_livestream_slice(
                 max_batch_size=len(rendered_files),
                 auto_schedule=True,
                 slots_per_day=6,
-                concurrency=2
+                concurrency=2,
+                privacy_mode="private",
+                files_subset=rendered_files,
+                log_callback=push_live_log
             )
             push_live_log(f"✓ [Stage 5/5] Successfully scheduled {len(results)} Live Shorts!")
         except Exception as e:
@@ -530,6 +582,12 @@ def process_livestream_slice(
         step_detail=f"Successfully clipped {len(rendered_files)} Shorts from live stream '{title}'!",
         next_step="Standby for next live stream polling cycle"
     )
+
+    # Clean intermediate live slice files to prevent disk leaks
+    try:
+        shutil.rmtree(work_dir, ignore_errors=True)
+    except Exception:
+        pass
 
     return rendered_files
 
@@ -560,6 +618,19 @@ def run_livestream_loop():
                 next_step="Start Live Daemon"
             )
             time.sleep(5)
+            continue
+
+        if is_system_paused():
+            set_livestream_progress(
+                status="paused",
+                current_step=0,
+                total_steps=5,
+                percentage=0,
+                stage_label="System Paused (Master Switch)",
+                step_detail="All autonomous engines paused by operator in Mission Control.",
+                next_step="Resume in Mission Control"
+            )
+            time.sleep(4)
             continue
 
         if not check_internet_connection():

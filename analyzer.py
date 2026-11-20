@@ -1,10 +1,11 @@
+import re
 import json
 import time
 import subprocess
 import requests
 import numpy as np
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from safety import sanitize_filename, ADULT_MONETIZATION_RISK_KEYWORDS
 
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
@@ -210,20 +211,18 @@ OUTPUT FORMAT: Return valid JSON ONLY:
         result["voiceover_script"] = "Here are three unbelievable GTA 6 moments you have to see right now! Let's get right into the action."
     return result
 
-def calculate_audio_spikes(
+def get_acoustic_energy_curve(
     audio_path: Path,
     max_duration_sec: Optional[float] = None
-) -> List[Dict[str, Any]]:
+) -> np.ndarray:
     """
-    Analyzes audio energy spikes (NeonClipping acoustic algorithm):
-    - 8kHz mono FFmpeg stream.
-    - RMS loudness jumps vs 2-minute rolling baseline.
-    - 2-4 kHz spectral band energy (screams, shouts, explosive gunshots).
-    - Returns top scored seconds: [{'time': float, 'score': float, 'loud': float, 'shout': float}].
+    Computes continuous 1Hz acoustic excitement curve across audio file.
+    Combines RMS loudness acceleration + 2-4 kHz scream/shout/laughter energy.
+    Returns 1D numpy array of excitement scores in [0.0, 1.0].
     """
     audio_path = Path(audio_path).resolve()
     if not audio_path.exists():
-        return []
+        return np.zeros(0, dtype=np.float32)
 
     from transcriber import get_ffmpeg_path
     ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
@@ -238,12 +237,12 @@ def calculate_audio_spikes(
         proc = subprocess.run(cmd, capture_output=True, timeout=60)
         raw = proc.stdout
     except Exception:
-        return []
+        return np.zeros(0, dtype=np.float32)
 
     x = np.frombuffer(raw[:len(raw) // 2 * 2], np.int16).astype(np.float32) / 32768.0
     n = len(x) // 8000
     if n == 0:
-        return []
+        return np.zeros(0, dtype=np.float32)
 
     if max_duration_sec and n > int(max_duration_sec):
         n = int(max_duration_sec)
@@ -265,7 +264,24 @@ def calculate_audio_spikes(
 
     loud = _z(rms)
     shout = np.clip(_z(hf * rms), 0.0, 1.0)
-    score = 0.55 * loud + 0.45 * shout
+    score = np.clip(0.55 * loud + 0.45 * shout, 0.0, 1.0)
+    return score.astype(np.float32)
+
+
+def calculate_audio_spikes(
+    audio_path: Path,
+    max_duration_sec: Optional[float] = None
+) -> List[Dict[str, Any]]:
+    """
+    Analyzes audio energy spikes (NeonClipping acoustic algorithm):
+    - 8kHz mono FFmpeg stream.
+    - RMS loudness jumps vs 2-minute rolling baseline.
+    - 2-4 kHz spectral band energy (screams, shouts, explosive gunshots).
+    - Returns top scored seconds: [{'time': float, 'score': float, 'loud': float, 'shout': float}].
+    """
+    score = get_acoustic_energy_curve(audio_path, max_duration_sec)
+    if len(score) == 0:
+        return []
 
     top_indices = np.argsort(score)[::-1]
     spikes = []
@@ -277,8 +293,8 @@ def calculate_audio_spikes(
             spikes.append({
                 "time": t_sec,
                 "score": round(float(score[idx]), 3),
-                "loud": round(float(loud[idx]), 3),
-                "shout": round(float(shout[idx]), 3)
+                "loud": round(float(score[idx]), 3),
+                "shout": round(float(score[idx]), 3)
             })
         if len(spikes) >= 8:
             break
@@ -296,21 +312,25 @@ def generate_micro_title(clip_text: str, fallback_title: str) -> str:
     return fallback_title
 
 def extract_top_speech_windows(
-    segments: List[Dict[str, Any]],
-    target_clips: int = 5
+    segments: Union[Dict[str, Any], List[Dict[str, Any]]],
+    target_clips: int = 5,
+    min_duration: float = 25.0,
+    max_duration: float = 45.0
 ) -> List[Dict[str, Any]]:
     """Instant 0.005s non-overlapping speech density highlight selector across video."""
-    if not segments:
+    if isinstance(segments, dict):
+        segments = segments.get("segments", [])
+    if not segments or not isinstance(segments, list):
         return []
 
-    total_dur = segments[-1].get("end", 0.0)
-    window_len = 32.0
+    total_dur = segments[-1].get("end", 0.0) if segments else 0.0
+    window_len = max(min_duration, min(max_duration, 32.0))
     step = 4.0
 
     scored_windows = []
     t = 0.0
     while t + window_len <= max(window_len + 1.0, total_dur):
-        win_segs = [s for s in segments if s["start"] >= t and s["end"] <= t + window_len]
+        win_segs = [s for s in segments if s.get("start", 0) >= t and s.get("end", 0) <= t + window_len]
         word_count = sum(len(s.get("words", [])) or len(s.get("text", "").split()) for s in win_segs)
         exclamation_count = sum(s.get("text", "").count("!") + s.get("text", "").count("?") for s in win_segs)
         score = word_count + (exclamation_count * 5)
@@ -321,19 +341,19 @@ def extract_top_speech_windows(
     scored_windows.sort(key=lambda x: x["score"], reverse=True)
     selected = []
     for w in scored_windows:
-        if any(abs(w["start"] - s["start"]) < 30.0 for s in selected):
+        if any(abs(w["start"] - s["start"]) < 25.0 for s in selected):
             continue
         selected.append(w)
         if len(selected) >= target_clips:
             break
 
     # If transcript is sparse, space clips uniformly across duration
-    if len(selected) < target_clips and total_dur > 35.0:
-        slice_gap = (total_dur - 35.0) / max(1, target_clips)
+    if len(selected) < target_clips and total_dur > min_duration:
+        slice_gap = (total_dur - min_duration) / max(1, target_clips)
         for i in range(target_clips):
             t_cand = round(i * slice_gap, 2)
-            if not any(abs(t_cand - s["start"]) < 25.0 for s in selected):
-                selected.append({"start": t_cand, "end": round(t_cand + 32.0, 2), "score": 10, "words": 30})
+            if not any(abs(t_cand - s["start"]) < 22.0 for s in selected):
+                selected.append({"start": t_cand, "end": round(min(total_dur, t_cand + window_len), 2), "score": 10, "words": 30})
                 if len(selected) >= target_clips:
                     break
 
@@ -351,13 +371,254 @@ def extract_top_speech_windows(
             "start": w["start"],
             "end": w["end"],
             "duration": round(w["end"] - w["start"], 2),
-            "spoken_word_count": w["words"],
+            "spoken_word_count": w.get("words", 30),
             "viral_hook": f"Peak Engagement #{idx+1}",
             "title": title,
-            "safe_title": sanitize_filename(f"GTA6_{theme.replace(' ', '_')}_{idx+1}_{int(w['start'])}s"),
-            "reason": f"Spoken density score: {w['score']} ({w['words']} words)"
+            "safe_title": sanitize_filename(f"Highlight_{theme.replace(' ', '_')}_{idx+1}_{int(w['start'])}s"),
+            "reason": f"Spoken density score: {w['score']} ({w.get('words', 30)} words)"
         })
     return candidates
+
+
+def detect_live_hyped_windows(
+    audio_path: Optional[Path] = None,
+    transcript: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
+    target_clips: int = 4,
+    min_duration: float = 26.0,
+    max_duration: float = 42.0,
+    stream_title: str = "",
+    channel_name: str = "Streamer",
+    total_duration: Optional[float] = None
+) -> List[Dict[str, Any]]:
+    """
+    Hyped Area Detection Engine for Live Stream HLS Slices:
+    - Fuses Acoustic Excitement (RMS loudness jumps + 2-4kHz scream/shout/laughter energy) [60%]
+    - With Speech Excitement (velocity wps + exclamations !/? + all-caps + viral gaming keywords) [40%]
+    - Centers non-overlapping viral windows on peak climax points
+    - Snaps boundaries to nearest Whisper word/phrase timestamps
+    - Generates dynamic, context-aware viral hook titles (never hardcoded GTA6 for non-GTA streams)
+    """
+    # 1. Normalize transcript segments & duration
+    segments = []
+    tx_dur = 0.0
+    if isinstance(transcript, dict):
+        segments = transcript.get("segments", []) or []
+        tx_dur = float(transcript.get("duration", 0.0) or 0.0)
+    elif isinstance(transcript, list):
+        segments = transcript
+        tx_dur = float(segments[-1].get("end", 0.0) if segments else 0.0)
+
+    # 2. Extract acoustic energy curve (1Hz resolution)
+    audio_curve = np.zeros(0, dtype=np.float32)
+    if audio_path and Path(audio_path).exists():
+        try:
+            audio_curve = get_acoustic_energy_curve(Path(audio_path), max_duration_sec=total_duration)
+        except Exception:
+            audio_curve = np.zeros(0, dtype=np.float32)
+
+    n_sec = max(
+        len(audio_curve),
+        int(total_duration or 0),
+        int(tx_dur or 0),
+        180
+    )
+    if len(audio_curve) < n_sec:
+        padded = np.zeros(n_sec, dtype=np.float32)
+        if len(audio_curve) > 0:
+            padded[:len(audio_curve)] = audio_curve
+        audio_curve = padded
+
+    # 3. Compute Speech Excitement & Velocity curve
+    speech_curve = np.zeros(n_sec, dtype=np.float32)
+    HYPE_WORDS = {
+        "omg", "holy", "insane", "bro", "no way", "what", "lets go", "dead", "died",
+        "sheesh", "win", "clutch", "run", "fast", "look", "watch", "kill", "haha",
+        "lol", "crazy", "impossible", "shut up", "wtf", "nooo", "yooo", "unreal", "clipping"
+    }
+
+    for s in segments:
+        s_start = max(0.0, float(s.get("start", 0.0)))
+        s_end = min(float(n_sec), float(s.get("end", s_start + 1.0)))
+        seg_dur = max(0.4, s_end - s_start)
+        txt = str(s.get("text", "")).strip()
+        words = s.get("words", []) or txt.split()
+        w_count = len(words)
+
+        wps = w_count / seg_dur
+        excl = txt.count("!") * 0.4 + txt.count("?") * 0.2
+        caps = sum(1 for w in txt.split() if len(w) >= 2 and w.isupper()) * 0.3
+        kws = sum(1 for kw in HYPE_WORDS if kw in txt.lower()) * 0.4
+
+        multiplier = 1.0 + min(3.5, excl + caps + kws)
+        velocity_score = min(2.5, wps / 2.0)
+        seg_hype = min(1.0, 0.25 * velocity_score * multiplier)
+
+        t0 = int(s_start)
+        t1 = min(n_sec, int(s_end) + 1)
+        if t1 > t0:
+            speech_curve[t0:t1] = np.maximum(speech_curve[t0:t1], seg_hype)
+
+    if speech_curve.max() > 0:
+        non_zero = speech_curve[speech_curve > 0]
+        p90 = np.percentile(non_zero, 85) if len(non_zero) > 0 else 1.0
+        speech_curve = np.clip(speech_curve / (p90 + 1e-5), 0.0, 1.0)
+
+    # 4. Hybrid Hype Profile (Acoustic + Speech Velocity/Excitement)
+    has_audio = bool(audio_curve.max() > 0)
+    has_speech = bool(speech_curve.max() > 0)
+
+    if has_audio and has_speech:
+        hybrid = 0.60 * audio_curve + 0.40 * speech_curve
+    elif has_audio:
+        hybrid = audio_curve
+    else:
+        hybrid = speech_curve
+
+    if len(hybrid) >= 3:
+        kernel = np.array([0.2, 0.6, 0.2], dtype=np.float32)
+        smoothed = np.convolve(hybrid, kernel, mode="same")
+    else:
+        smoothed = hybrid
+
+    # 5. Extract Candidate Hyped Windows
+    target_dur = 32.0
+    pre_pad = 12.0
+    window_candidates = []
+
+    for t in range(4, n_sec - 4):
+        val = smoothed[t]
+        if val > 0.10 and val >= smoothed[t-1] and val >= smoothed[t+1]:
+            cand_start = max(0.0, float(t) - pre_pad)
+            cand_end = min(float(n_sec), cand_start + target_dur)
+
+            # Snap to Whisper segment boundaries
+            covering = [s for s in segments if s.get("start", 0) >= cand_start - 3.0 and s.get("end", 0) <= cand_end + 3.0]
+            if covering:
+                first_s = covering[0].get("start", cand_start)
+                if abs(first_s - cand_start) <= 3.5:
+                    cand_start = max(0.0, float(first_s))
+                last_s = covering[-1].get("end", cand_end)
+                if abs(last_s - cand_end) <= 4.0:
+                    cand_end = min(float(n_sec), float(last_s))
+
+            dur = cand_end - cand_start
+            if dur < min_duration:
+                cand_end = min(float(n_sec), cand_start + min_duration)
+            elif dur > max_duration:
+                cand_end = cand_start + max_duration
+
+            dur = round(cand_end - cand_start, 2)
+            if dur >= min_duration:
+                i0 = int(cand_start)
+                i1 = min(n_sec, int(cand_end))
+                win_mean = float(smoothed[i0:i1].mean()) if i1 > i0 else float(val)
+                peak_pct = min(1.0, float(val) / 0.40) * 100.0
+                mean_pct = min(1.0, win_mean / 0.25) * 100.0
+                win_score = round(0.70 * peak_pct + 0.30 * mean_pct, 1)
+
+                window_candidates.append({
+                    "start": round(cand_start, 2),
+                    "end": round(cand_end, 2),
+                    "duration": dur,
+                    "peak_time": round(float(t), 2),
+                    "peak_val": float(val),
+                    "hype_score": win_score
+                })
+
+    # 6. Non-overlapping selection (minimum 24s separation)
+    window_candidates.sort(key=lambda w: w["hype_score"], reverse=True)
+    selected_windows = []
+    for w in window_candidates:
+        if any(abs(w["start"] - s["start"]) < 24.0 for s in selected_windows):
+            continue
+        selected_windows.append(w)
+        if len(selected_windows) >= target_clips:
+            break
+
+    # 7. Fallback if fewer than target_clips
+    if len(selected_windows) < target_clips:
+        if segments:
+            speech_cands = extract_top_speech_windows(segments, target_clips=target_clips)
+            for sc in speech_cands:
+                if not any(abs(sc["start"] - s["start"]) < 24.0 for s in selected_windows):
+                    selected_windows.append({
+                        "start": sc["start"],
+                        "end": sc["end"],
+                        "duration": sc["duration"],
+                        "peak_time": sc["start"] + 15.0,
+                        "hype_score": 68.0
+                    })
+                if len(selected_windows) >= target_clips:
+                    break
+
+        if len(selected_windows) < target_clips and n_sec > min_duration:
+            slice_gap = (n_sec - min_duration) / max(1, target_clips)
+            for i in range(target_clips):
+                t_cand = round(i * slice_gap, 2)
+                if not any(abs(t_cand - s["start"]) < 22.0 for s in selected_windows):
+                    selected_windows.append({
+                        "start": t_cand,
+                        "end": round(min(float(n_sec), t_cand + target_dur), 2),
+                        "duration": round(min(float(n_sec), t_cand + target_dur) - t_cand, 2),
+                        "peak_time": t_cand + 15.0,
+                        "hype_score": 55.0
+                    })
+                if len(selected_windows) >= target_clips:
+                    break
+
+    # 8. Dynamic Viral Hooks & Channel Context
+    clean_author = re.sub(r'[^a-zA-Z0-9 ]', '', channel_name).strip() or "Live"
+    is_gta = "gta" in stream_title.lower() or "grand theft auto" in stream_title.lower()
+
+    GENERIC_THEMES = [
+        "Insane Live Reaction", "Crazy Clutch Play", "Unbelievable Moment",
+        "Streamer Goes Crazy", "Most Viral Moment Right Now", "Zero Chill Reaction",
+        "Impossible Event Happened", "Hilarious Stream Freakout"
+    ]
+    GTA_THEMES = [
+        "Insane Police Escape", "Crazy Stunt Jump", "Impossible Clutch Play",
+        "Unbelievable Physics Glitch", "Total Chaos in Vice City", "High Speed Highway Chase",
+        "Insane Gunfight Survival", "Speedrun Moment"
+    ]
+    THEMES = GTA_THEMES if is_gta else GENERIC_THEMES
+
+    final_clips = []
+    for idx, win in enumerate(selected_windows[:target_clips]):
+        st_t = win["start"]
+        en_t = win["end"]
+        win_texts = [
+            s.get("text", "").strip() for s in segments
+            if s.get("start", 0) >= st_t - 1.0 and s.get("end", 0) <= en_t + 1.0
+        ]
+        clip_text = " ".join([t for t in win_texts if t])
+        words_count = len(clip_text.split())
+
+        theme = THEMES[idx % len(THEMES)]
+        if clip_text and words_count >= 4:
+            clean_quotes = [p.strip() for p in re.split(r'[.!?]', clip_text) if len(p.strip()) > 8]
+            if clean_quotes:
+                hook_quote = clean_quotes[0][:38].strip()
+                title = f"{clean_author}: \"{hook_quote}\" 😱"
+            else:
+                title = f"{clean_author} - {theme} @ {int(st_t)}s"
+        else:
+            title = f"{clean_author} - {theme} @ {int(st_t)}s"
+
+        score_int = int(min(99, max(50, win.get("hype_score", 75))))
+        final_clips.append({
+            "start": win["start"],
+            "end": win["end"],
+            "duration": win["duration"],
+            "peak_time": win.get("peak_time", win["start"] + 15.0),
+            "spoken_word_count": words_count,
+            "hype_score": score_int,
+            "viral_hook": f"🔥 Hyped Live Area #{idx+1} ({score_int}% Hype)",
+            "title": title,
+            "safe_title": sanitize_filename(f"Live_{clean_author.replace(' ', '_')}_{idx+1}_{int(st_t)}s"),
+            "reason": f"Acoustic + Speech Velocity Peak at {int(win.get('peak_time', st_t))}s (Hype: {score_int}%)"
+        })
+
+    return final_clips
 
 
 def extract_candidates_full(
