@@ -96,20 +96,25 @@ def set_watcher_progress(
     percent: int = 0,
     is_live: bool = False,
     current_clip: int = 0,
-    total_clips: int = 0
+    total_clips: int = 0,
+    channel_name: str = ""
 ):
     global _WATCHER_PROGRESS
     with _WATCHER_LOCK:
         _WATCHER_PROGRESS = {
             "active": active,
+            "status": "running" if active else ("waiting" if percent == 100 else "idle"),
             "video_id": video_id,
             "video_title": video_title,
+            "channel_name": channel_name,
             "stage": stage,
             "total_stages": total_stages,
             "stage_name": stage_name,
+            "stage_label": f"Stage {stage}/{total_stages}: {stage_name}" if active else stage_name,
             "step_detail": step_detail,
             "next_step": next_step,
             "percent": max(0, min(100, percent)),
+            "percentage": max(0, min(100, percent)),
             "is_live": is_live,
             "current_clip": current_clip,
             "total_clips": total_clips,

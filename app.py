@@ -1836,6 +1836,7 @@ with tab3:
         shorts_n = st.slider("Shorts per New Video", min_value=2, max_value=8, value=watcher_cfg.get("shorts_per_video", 4))
         auto_up = st.checkbox("🎯 Auto-Schedule to YouTube Studio", value=watcher_cfg.get("auto_upload", True), help="Automatically queues and schedules newly extracted Shorts across daily peak High-CPM slots")
         hook_bg = st.checkbox("🔥 Burn Frame-1 Viral Hook Badge", value=watcher_cfg.get("enable_hook_badge", True), help="Adds curiosity banner on frame 1 to maximize swipe-through CTR")
+        live_mon = st.checkbox("🔴 Live Stream Rolling Buffer (Clip active livestreams via HLS)", value=watcher_cfg.get("enable_live_monitoring", True), help="Taps active YouTube livestreams & renders Shorts from trailing window in real-time")
 
     if st.button("💾 Save Autopilot Configuration", use_container_width=True):
         raw_chs = st.session_state.get("txt_watcher_channels", "")
@@ -1845,6 +1846,7 @@ with tab3:
         watcher_cfg["shorts_per_video"] = shorts_n
         watcher_cfg["auto_upload"] = auto_up
         watcher_cfg["enable_hook_badge"] = hook_bg
+        watcher_cfg["enable_live_monitoring"] = live_mon
         save_watcher_config(watcher_cfg)
         st.success(f"✓ Autopilot configuration saved! ({len(parsed_channels)} target channels registered)")
 
