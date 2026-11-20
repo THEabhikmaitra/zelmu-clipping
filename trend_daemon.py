@@ -17,6 +17,7 @@ from typing import Dict, Any, List
 from trends_hunter import fetch_google_trends_us
 from trend_producer import produce_trend_package
 from editor import check_internet_connection
+from arbiter import is_system_paused, push_unified_log
 
 CONFIG_FILE = Path("trend_daemon_config.json")
 STATE_FILE = Path("trend_daemon_state.json")
@@ -75,6 +76,7 @@ def push_daemon_log(msg: str):
     ts = time.strftime("%H:%M:%S")
     line = f"[{ts}] {msg}"
     print(line)
+    push_unified_log("TREND", msg)
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
@@ -153,6 +155,20 @@ def daemon_loop():
         if not cfg.get("enabled", False):
             set_daemon_progress(active=False, stage_name="Stopped", step_detail="Daemon disabled in configuration")
             time.sleep(3)
+            continue
+
+        if is_system_paused():
+            set_daemon_progress(
+                active=True,
+                current_trend="",
+                stage=0,
+                total_stages=5,
+                stage_name="System Paused (Master Switch)",
+                step_detail="Autonomous trend worker paused by operator in Mission Control.",
+                next_step="Resume in Mission Control",
+                percent=0
+            )
+            time.sleep(4)
             continue
 
         if not check_internet_connection():

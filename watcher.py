@@ -26,6 +26,14 @@ from transcriber import (
 from analyzer import extract_candidates_full
 from editor import generate_karaoke_ass, render_mode_a_short, check_internet_connection
 from uploader import upload_batch_private, calculate_monetization_schedule_slots, is_authenticated
+from arbiter import (
+    acquire_compute_lock,
+    release_compute_lock,
+    should_yield,
+    is_system_paused,
+    push_unified_log,
+    PRIORITY_VOD
+)
 
 CONFIG_FILE = Path("watcher_config.json")
 STATE_FILE = Path("watcher_state.json")
@@ -73,6 +81,7 @@ def push_watcher_log(msg: str):
     import datetime
     now_str = datetime.datetime.now().strftime("%H:%M:%S")
     entry = f"[{now_str}] {msg}"
+    push_unified_log("VOD", msg)
     with _WATCHER_LOCK:
         _WATCHER_LOGS.append(entry)
         if len(_WATCHER_LOGS) > 150:
@@ -406,131 +415,137 @@ def process_video_autonomous(
     segments_dir.mkdir(parents=True, exist_ok=True)
     READY_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Stage 2: Transcript & Audio
-    set_watcher_progress(
-        active=True, video_id=vid_id, video_title=title,
-        stage=2, total_stages=5, stage_name="Dialogue Transcription",
-        step_detail=f"Extracting captions & running acoustic analysis on '{title[:30]}...'...",
-        next_step="AI highlight candidate scoring",
-        percent=30
-    )
-    transcript_json = work_dir / "02_transcript.json"
-    transcript = None
-    if transcript_json.exists():
-        with open(transcript_json, "r", encoding="utf-8") as f:
-            transcript = json.load(f)
-
-    if not transcript:
-        push_watcher_log(f"Fetching official captions for {vid_id}...")
-        transcript = fetch_youtube_captions(video_url, transcript_json, max_duration_sec=900.0)
-
-    if not transcript:
-        push_watcher_log(f"No captions found. Running Whisper Turbo speech recognition...")
-        audio_wav = work_dir / "01_audio.wav"
-        extract_audio_wav(video_url, audio_wav, max_duration_sec=900.0)
-        transcript = transcribe_audio_whisper(audio_wav, transcript_json)
-
-    # Stage 3: Candidate Analysis
-    set_watcher_progress(
-        active=True, video_id=vid_id, video_title=title,
-        stage=3, total_stages=5, stage_name="Highlight Candidate Scoring",
-        step_detail=f"Scoring speech density and acoustic excitement spikes for {shorts_count} Shorts...",
-        next_step="Direct stream cutting & Intel QSV rendering",
-        percent=50
-    )
-    cand_json = work_dir / "03_candidates_mode_a.json"
-    if cand_json.exists():
-        with open(cand_json, "r", encoding="utf-8") as f:
-            analysis = json.load(f)
-    else:
-        push_watcher_log(f"Evaluating transcript highlights for {shorts_count} candidate clips...")
-        analysis = extract_candidates_full(
-            transcript,
-            mode="Mode A",
-            channel_name=author,
-            target_clips=shorts_count
+    # Stage 2 to Stage 4: Protected by Arbiter (Priority 3 - VOD)
+    push_watcher_log("Waiting for Compute Lock (P3) to run dialogue transcription & QSV render...")
+    acquire_compute_lock("watcher", PRIORITY_VOD, f"VOD: {title[:25]}", timeout=900.0)
+    try:
+        # Stage 2: Transcript & Audio
+        set_watcher_progress(
+            active=True, video_id=vid_id, video_title=title,
+            stage=2, total_stages=5, stage_name="Dialogue Transcription",
+            step_detail=f"Extracting captions & running acoustic analysis on '{title[:30]}...'...",
+            next_step="AI highlight candidate scoring",
+            percent=30
         )
-        with open(cand_json, "w", encoding="utf-8") as f:
-            json.dump(analysis, f, indent=2)
+        transcript_json = work_dir / "02_transcript.json"
+        transcript = None
+        if transcript_json.exists():
+            with open(transcript_json, "r", encoding="utf-8") as f:
+                transcript = json.load(f)
 
-    candidates = analysis.get("candidates", [])
-    push_watcher_log(f"Selected {len(candidates)} high-potential candidate moments.")
-    style_key = "neon" if "neon" in caption_style.lower() else ("clean" if "clean" in caption_style.lower() else "karaoke")
+        if not transcript:
+            push_watcher_log(f"Fetching official captions for {vid_id}...")
+            transcript = fetch_youtube_captions(video_url, transcript_json, max_duration_sec=900.0)
 
-    rendered_files = []
-    from editor import get_direct_stream_urls, download_video_section, find_profanities_in_words
-    prefetched_stream_urls = get_direct_stream_urls(video_url)
+        if not transcript:
+            push_watcher_log(f"No captions found. Running Whisper Turbo speech recognition...")
+            audio_wav = work_dir / "01_audio.wav"
+            extract_audio_wav(video_url, audio_wav, max_duration_sec=900.0)
+            transcript = transcribe_audio_whisper(audio_wav, transcript_json)
 
-    # Stage 4: Rendering Shorts (Parallel QSV Pipeline)
-    total_cands = len(candidates)
-    set_watcher_progress(
-        active=True, video_id=vid_id, video_title=title,
-        stage=4, total_stages=5, stage_name="Rendering Shorts",
-        step_detail=f"Spawning parallel QSV workers for {total_cands} clips...",
-        next_step="Auto-scheduling to Studio",
-        percent=55, current_clip=0, total_clips=total_cands
-    )
+        # Stage 3: Candidate Analysis
+        set_watcher_progress(
+            active=True, video_id=vid_id, video_title=title,
+            stage=3, total_stages=5, stage_name="Highlight Candidate Scoring",
+            step_detail=f"Scoring speech density and acoustic excitement spikes for {shorts_count} Shorts...",
+            next_step="Direct stream cutting & Intel QSV rendering",
+            percent=50
+        )
+        cand_json = work_dir / "03_candidates_mode_a.json"
+        if cand_json.exists():
+            with open(cand_json, "r", encoding="utf-8") as f:
+                analysis = json.load(f)
+        else:
+            push_watcher_log(f"Evaluating transcript highlights for {shorts_count} candidate clips...")
+            analysis = extract_candidates_full(
+                transcript,
+                mode="Mode A",
+                channel_name=author,
+                target_clips=shorts_count
+            )
+            with open(cand_json, "w", encoding="utf-8") as f:
+                json.dump(analysis, f, indent=2)
 
-    def process_watcher_clip(c_idx: int, cand: dict):
-        start_t = cand["start"]
-        end_t = cand["end"]
-        safe_title = cand.get("safe_title", f"GTA6_Moment_{c_idx+1}")
-        dest_stem = f"{safe_title}_{c_idx+1}_{int(start_t)}s"
-        final_dest = READY_DIR / f"{dest_stem}.mp4"
+        candidates = analysis.get("candidates", [])
+        push_watcher_log(f"Selected {len(candidates)} high-potential candidate moments.")
+        style_key = "neon" if "neon" in caption_style.lower() else ("clean" if "clean" in caption_style.lower() else "karaoke")
 
-        if final_dest.exists() and final_dest.stat().st_size > 102400:
+        rendered_files = []
+        from editor import get_direct_stream_urls, download_video_section, find_profanities_in_words
+        prefetched_stream_urls = get_direct_stream_urls(video_url)
+
+        # Stage 4: Rendering Shorts (Parallel QSV Pipeline)
+        total_cands = len(candidates)
+        set_watcher_progress(
+            active=True, video_id=vid_id, video_title=title,
+            stage=4, total_stages=5, stage_name="Rendering Shorts",
+            step_detail=f"Spawning parallel QSV workers for {total_cands} clips...",
+            next_step="Auto-scheduling to Studio",
+            percent=55, current_clip=0, total_clips=total_cands
+        )
+
+        def process_watcher_clip(c_idx: int, cand: dict):
+            start_t = cand["start"]
+            end_t = cand["end"]
+            safe_title = cand.get("safe_title", f"GTA6_Moment_{c_idx+1}")
+            dest_stem = f"{safe_title}_{c_idx+1}_{int(start_t)}s"
+            final_dest = READY_DIR / f"{dest_stem}.mp4"
+
+            if final_dest.exists() and final_dest.stat().st_size > 102400:
+                return final_dest
+
+            raw_seg = segments_dir / f"seg_raw_{c_idx}.mp4"
+            push_watcher_log(f"[Worker #{c_idx+1}] Cutting section ({start_t:.1f}s - {end_t:.1f}s) via zero-disk stream cut...")
+            download_video_section(video_url, start_t, end_t, raw_seg, stream_urls=prefetched_stream_urls)
+
+            seg_words = []
+            for s in transcript.get("segments", []):
+                for w in s.get("words", []):
+                    if start_t <= w["start"] <= end_t:
+                        seg_words.append(w)
+
+            ass_file = segments_dir / f"subs_{c_idx}.ass"
+            generate_karaoke_ass(seg_words, ass_file, clip_start_offset=start_t, style_preset=style_key)
+
+            flagged = find_profanities_in_words(seg_words)
+
+            push_watcher_log(f"[Worker #{c_idx+1}] Rendering short with Intel QSV & viral hook badge...")
+            render_mode_a_short(
+                source_video=raw_seg,
+                ass_subtitles=ass_file,
+                output_short_path=final_dest,
+                flagged_profanities=flagged,
+                split_layout=False,
+                enable_tracking=enable_tracking,
+                hook_title=cand.get("title", "GTA 6 INSANE MOMENT") if enable_hook_badge else None
+            )
+            push_watcher_log(f"✓ Rendered autonomous short: {final_dest.name}")
+            raw_seg.unlink(missing_ok=True)
+            for p in segments_dir.glob(f"seg_raw_{c_idx}.*"):
+                p.unlink(missing_ok=True)
             return final_dest
 
-        raw_seg = segments_dir / f"seg_raw_{c_idx}.mp4"
-        push_watcher_log(f"[Worker #{c_idx+1}] Cutting section ({start_t:.1f}s - {end_t:.1f}s) via zero-disk stream cut...")
-        download_video_section(video_url, start_t, end_t, raw_seg, stream_urls=prefetched_stream_urls)
+        pool_workers = min(3, max(1, total_cands))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=pool_workers) as pool:
+            future_map = {pool.submit(process_watcher_clip, c_idx, cand): c_idx for c_idx, cand in enumerate(candidates)}
+            while any(not fut.done() for fut in future_map):
+                time.sleep(1)
+                done_count = sum(1 for fut in future_map if fut.done())
+                render_pct = 55 + int((done_count / max(1, total_cands)) * 35)
+                set_watcher_progress(
+                    active=True, video_id=vid_id, video_title=title,
+                    stage=4, total_stages=5, stage_name="Rendering Shorts",
+                    step_detail=f"Rendering {done_count}/{total_cands} clips in parallel via Intel QSV...",
+                    next_step="Auto-scheduling to Studio" if done_count == total_cands else f"Processing remaining ({total_cands - done_count})",
+                    percent=render_pct, current_clip=done_count, total_clips=total_cands
+                )
 
-        seg_words = []
-        for s in transcript.get("segments", []):
-            for w in s.get("words", []):
-                if start_t <= w["start"] <= end_t:
-                    seg_words.append(w)
-
-        ass_file = segments_dir / f"subs_{c_idx}.ass"
-        generate_karaoke_ass(seg_words, ass_file, clip_start_offset=start_t, style_preset=style_key)
-
-        flagged = find_profanities_in_words(seg_words)
-
-        push_watcher_log(f"[Worker #{c_idx+1}] Rendering short with Intel QSV & viral hook badge...")
-        render_mode_a_short(
-            source_video=raw_seg,
-            ass_subtitles=ass_file,
-            output_short_path=final_dest,
-            flagged_profanities=flagged,
-            split_layout=False,
-            enable_tracking=enable_tracking,
-            hook_title=cand.get("title", "GTA 6 INSANE MOMENT") if enable_hook_badge else None
-        )
-        push_watcher_log(f"✓ Rendered autonomous short: {final_dest.name}")
-        raw_seg.unlink(missing_ok=True)
-        for p in segments_dir.glob(f"seg_raw_{c_idx}.*"):
-            p.unlink(missing_ok=True)
-        return final_dest
-
-    pool_workers = min(3, max(1, total_cands))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=pool_workers) as pool:
-        future_map = {pool.submit(process_watcher_clip, c_idx, cand): c_idx for c_idx, cand in enumerate(candidates)}
-        while any(not fut.done() for fut in future_map):
-            time.sleep(1)
-            done_count = sum(1 for fut in future_map if fut.done())
-            render_pct = 55 + int((done_count / max(1, total_cands)) * 35)
-            set_watcher_progress(
-                active=True, video_id=vid_id, video_title=title,
-                stage=4, total_stages=5, stage_name="Rendering Shorts",
-                step_detail=f"Rendering {done_count}/{total_cands} clips in parallel via Intel QSV...",
-                next_step="Auto-scheduling to Studio" if done_count == total_cands else f"Processing remaining ({total_cands - done_count})",
-                percent=render_pct, current_clip=done_count, total_clips=total_cands
-            )
-
-        for fut in future_map:
-            res_dest = fut.result()
-            if res_dest and res_dest.exists() and res_dest.stat().st_size > 102400:
-                rendered_files.append(res_dest)
+            for fut in future_map:
+                res_dest = fut.result()
+                if res_dest and res_dest.exists() and res_dest.stat().st_size > 102400:
+                    rendered_files.append(res_dest)
+    finally:
+        release_compute_lock("watcher")
 
     # Stage 5: Scheduling to Studio
     if auto_upload and rendered_files and is_authenticated():
@@ -569,6 +584,21 @@ def run_watcher_loop():
         if not cfg.get("enabled", False):
             set_watcher_progress(active=False, stage=0, stage_name="Paused", step_detail="Autopilot is paused. Click Start to monitor channels.", percent=0)
             time.sleep(5)
+            continue
+
+        if is_system_paused():
+            set_watcher_progress(
+                active=True,
+                video_id="",
+                video_title="",
+                stage=0,
+                total_stages=5,
+                stage_name="System Paused (Master Switch)",
+                step_detail="Autonomous channel watcher paused by operator in Mission Control.",
+                next_step="Resume in Mission Control",
+                percent=0
+            )
+            time.sleep(4)
             continue
 
         if not check_internet_connection():

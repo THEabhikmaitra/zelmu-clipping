@@ -113,6 +113,13 @@ from livestream_buffer import (
     get_livestream_logs,
     get_livestream_progress
 )
+from arbiter import (
+    pause_all_daemons,
+    resume_all_daemons,
+    is_system_paused,
+    get_arbiter_status,
+    get_unified_logs
+)
 
 # Ensure base directories exist
 WORKSPACE_DIR = Path("workspace")
@@ -702,13 +709,148 @@ def render_labor_card(
     placeholder.markdown(html, unsafe_allow_html=True)
 
 # Instant Client-Side Tabs (Positioned inside Top Fixed Navbar beside logo)
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab_mc, tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "🎛️ Mission Control",
     "Produce",
     "Upload",
     "🤖 24/7 Channel Watcher (VODs)",
     "🔴 Live Stream Clipper (HLS)",
     "🎯 Trend Hunter (USA 4h)"
 ])
+
+with tab_mc:
+    # 1. Master System Control Row
+    st.markdown("<div class='section-title'>🎛️ AUTONOMOUS MISSION CONTROL & ARBITER DECK</div>", unsafe_allow_html=True)
+    st.caption("Central command for all 3 autonomous background daemons (Trend Hunter, Live Clipper, Channel Watcher). Manages hardware mutual exclusion (Intel QSV encoder & Whisper AI memory) to eliminate system breaks and RAM saturation.")
+
+    paused = is_system_paused()
+    col_p1, col_p2, col_p3 = st.columns([2.5, 1.2, 1.2])
+    with col_p1:
+        if paused:
+            st.error("⏸️ **SYSTEM PAUSED:** All background daemons are paused. Compute queues are suspended.")
+        else:
+            st.success("🟢 **SYSTEM ACTIVE:** Compute arbiter operating normally. Priority: Trend (P1) > Live (P2) > VOD (P3).")
+    with col_p2:
+        if paused:
+            if st.button("▶️ RESUME ALL", type="primary", use_container_width=True, key="mc_btn_resume"):
+                resume_all_daemons()
+                st.rerun()
+        else:
+            if st.button("⏸️ PAUSE ALL", type="secondary", use_container_width=True, key="mc_btn_pause"):
+                pause_all_daemons()
+                st.rerun()
+    with col_p3:
+        if st.button("🔄 Refresh State", use_container_width=True, key="mc_btn_refresh"):
+            st.rerun()
+
+    st.markdown("---")
+
+    # 2. Engine Control Grid (3 Cards)
+    st.markdown("<div class='section-title'>⚙️ BACKGROUND ENGINE FLEET</div>", unsafe_allow_html=True)
+    ec1, ec2, ec3 = st.columns(3, gap="medium")
+
+    # Card 1: Trend Hunter (P1)
+    with ec1:
+        t_running = is_trend_daemon_running()
+        t_prog = get_daemon_progress()
+        st.markdown("### 🎯 Trend Hunter (P1)")
+        st.caption("Breakout US news & search spikes.")
+        if t_running:
+            st.markdown("Status: 🟢 **Running**")
+            st.markdown(f"**Stage:** `{t_prog.get('stage_name', 'Active')}`")
+            st.markdown(f"**Active Trend:** *{t_prog.get('current_trend') or 'Scanning US Trends'}*")
+            if st.button("⏹️ Stop Trend Worker", use_container_width=True, key="mc_stop_trend"):
+                stop_trend_daemon()
+                st.rerun()
+        else:
+            st.markdown("Status: ⚪ **Stopped**")
+            st.caption("Engine offline. No trends being converted.")
+            if st.button("🚀 Start Trend Worker", type="primary", use_container_width=True, key="mc_start_trend"):
+                start_trend_daemon()
+                st.rerun()
+
+    # Card 2: Live Stream Clipper (P2)
+    with ec2:
+        l_running = is_livestream_running()
+        l_prog = get_livestream_progress()
+        st.markdown("### 🔴 Live Clipper (P2)")
+        st.caption("Active YouTube live streams.")
+        if l_running:
+            st.markdown("Status: 🟢 **Running**")
+            st.markdown(f"**Stage:** `{l_prog.get('stage_label', 'Active')}`")
+            st.markdown(f"**Live Stream:** *{l_prog.get('stream_title') or 'Scanning Channels'}*")
+            if st.button("⏹️ Stop Live Buffer", use_container_width=True, key="mc_stop_live"):
+                stop_livestream_daemon()
+                st.rerun()
+        else:
+            st.markdown("Status: ⚪ **Stopped**")
+            st.caption("Engine offline. No live streams tracked.")
+            if st.button("🚀 Start Live Buffer", type="primary", use_container_width=True, key="mc_start_live"):
+                start_livestream_daemon()
+                st.rerun()
+
+    # Card 3: Channel Watcher (P3)
+    with ec3:
+        w_running = is_watcher_running()
+        w_prog = get_watcher_progress()
+        st.markdown("### 🤖 VOD Watcher (P3)")
+        st.caption("Archive video uploads & channels.")
+        if w_running:
+            st.markdown("Status: 🟢 **Running**")
+            st.markdown(f"**Stage:** `{w_prog.get('stage_name', 'Active')}`")
+            st.markdown(f"**Active Video:** *{w_prog.get('video_title') or 'Scanning Uploads'}*")
+            if st.button("⏹️ Stop VOD Watcher", use_container_width=True, key="mc_stop_vod"):
+                stop_watcher_daemon()
+                st.rerun()
+        else:
+            st.markdown("Status: ⚪ **Stopped**")
+            st.caption("Engine offline. No channels monitored.")
+            if st.button("🚀 Start VOD Watcher", type="primary", use_container_width=True, key="mc_start_vod"):
+                start_watcher_daemon()
+                st.rerun()
+
+    st.markdown("---")
+
+    # 3. Two-Column Deck: Live Consolidated Log Stream + Compute Arbiter Lock Status
+    col_logs, col_arbiter = st.columns([1.7, 1.0], gap="large")
+
+    with col_arbiter:
+        st.markdown("<div class='section-title'>🔒 COMPUTE RESOURCE ARBITER</div>", unsafe_allow_html=True)
+        @st.fragment(run_every="3s")
+        def render_mc_arbiter_deck():
+            arb = get_arbiter_status()
+            holder = arb.get("holder")
+            p_val = arb.get("priority", 999)
+            op = arb.get("operation") or "Idle / Ready"
+            held = arb.get("held_sec", 0.0)
+            q_len = arb.get("queue_len", 0)
+
+            m1, m2 = st.columns(2)
+            with m1:
+                st.metric("Compute Lock Holder", holder or "None (Unlocked)", delta=f"P{p_val}" if holder else "Free")
+            with m2:
+                st.metric("Active Operation", f"{op[:20]}..." if len(op) > 20 else op, delta=f"{held}s held" if holder else None)
+
+            st.markdown(f"**Wait Queue:** `{q_len}` engine(s) waiting")
+            if arb.get("queue"):
+                for q_item in arb["queue"]:
+                    st.caption(f"⏳ **P{q_item['priority']}**: {q_item['caller']} — *{q_item['operation']}*")
+            else:
+                st.caption("No engines queued. Hardware resources clear.")
+
+        render_mc_arbiter_deck()
+
+    with col_logs:
+        st.markdown("<div class='section-title'>⚡ CONSOLIDATED EVENT STREAM (LIVE 3S REFRESH)</div>", unsafe_allow_html=True)
+        @st.fragment(run_every="3s")
+        def render_mc_unified_log_box():
+            logs = get_unified_logs(max_lines=45)
+            if logs:
+                st.code("\n".join(logs[-30:]), language="bash")
+            else:
+                st.caption("No unified events recorded yet. Start any engine to stream events.")
+
+        render_mc_unified_log_box()
 
 with tab1:
     col_l, col_r = st.columns([1.6, 1])
@@ -2056,61 +2198,62 @@ with tab5:
                 filtered_trends = [t for t in trends_data if kw_low in t["query"].lower()]
                 st.caption(f"Showing {len(filtered_trends)} matching trends for '{niche_keyword}'")
 
-            for idx, tr in enumerate(filtered_trends[:30]):
-                with st.expander(f"#{idx+1} {tr['query'].upper()} — {tr['search_vol_display']} ({tr['started_time']})", expanded=(idx < 2)):
-                    c1, c2 = st.columns([2.2, 1.8])
-                    with c1:
-                        st.markdown(f"**Search Volume:** `{tr['search_vol_display']}` | **Started:** `{tr['started_time']}` (🟢 Active)")
-                        st.markdown(f"**Trend Breakdown (All):** *{tr['breakdown_display']}*")
-                        st.markdown(f"[🔗 Google Search Link]({tr['search_link']}) | [📈 Google Trends Explore Link]({tr['explore_link']})")
+            with st.container(height=650):
+                for idx, tr in enumerate(filtered_trends[:30]):
+                    with st.expander(f"#{idx+1} {tr['query'].upper()} — {tr['search_vol_display']} ({tr['started_time']})", expanded=(idx < 2)):
+                        c1, c2 = st.columns([2.2, 1.8])
+                        with c1:
+                            st.markdown(f"**Search Volume:** `{tr['search_vol_display']}` | **Started:** `{tr['started_time']}` (🟢 Active)")
+                            st.markdown(f"**Trend Breakdown (All):** *{tr['breakdown_display']}*")
+                            st.markdown(f"[🔗 Google Search Link]({tr['search_link']}) | [📈 Google Trends Explore Link]({tr['explore_link']})")
 
-                        # In the news links
-                        if st.button("📰 Load Live News Links", key=f"btn_news_{idx}"):
-                            news_items = get_trend_news_articles(tr['query'], max_articles=3)
-                            tr["news_articles"] = news_items
-                            if news_items:
-                                st.write("**Top News Headlines:**")
-                                for ni in news_items:
-                                    st.markdown(f"- [{ni['title']}]({ni['url']}) *({ni['source']})*")
-                            else:
-                                st.caption("No immediate Google News articles found.")
-                    with c2:
-                        st.markdown("##### Content Actions")
-                        if st.button(f"🚀 Produce 6 Reels + 2 Videos (Instant Publish)", key=f"btn_pkg_{idx}", type="primary", use_container_width=True):
-                            with st.spinner(f"Producing & publishing 6 Reels + 2 Landscape Videos for '{tr['query']}'..."):
-                                def manual_update_status(cur_q, stg, stg_name, detail, pct, s_done, v_done):
-                                    set_daemon_progress(
-                                        active=True,
-                                        current_trend=cur_q,
-                                        stage=stg,
-                                        total_stages=5,
-                                        stage_name=stg_name,
-                                        step_detail=detail,
-                                        next_step="Instant Public Publishing" if stg < 5 else "Completed",
-                                        percent=pct,
-                                        shorts_done=s_done,
-                                        videos_done=v_done
-                                    )
-                                pkg_res = produce_trend_package(
-                                    tr,
-                                    auto_upload=is_authenticated(),
-                                    progress_callback=lambda m: push_daemon_log(f"[{tr['query']}] {m}"),
-                                    status_callback=manual_update_status
-                                )
-                                manual_update_status(tr['query'], 5, "Completed", f"Produced & published {pkg_res['total_rendered']} assets (6 Reels + 2 Videos)", 100, len(pkg_res.get('shorts', [])), len(pkg_res.get('landscapes', [])))
-                                st.success(f"✓ Successfully produced and published {pkg_res['total_rendered']} assets instantly (PUBLIC) to YouTube Studio!")
-                                st.rerun()
-
-                        if st.button(f"⚡ Clip in Tab 1 (Produce)", key=f"btn_clip_{idx}", use_container_width=True):
-                            with st.spinner(f"Searching YouTube videos for '{tr['query']}'..."):
-                                vids = search_trend_source_videos(tr['query'], max_results=3, topic_filter=video_topic_suffix)
-                                if vids:
-                                    top_vid = vids[0]
-                                    st.session_state["txt_raw_url"] = top_vid["url"]
-                                    st.success(f"Selected: {top_vid['title']} ({top_vid['url']})! Switched to Tab 1.")
-                                    st.rerun()
+                            # In the news links
+                            if st.button("📰 Load Live News Links", key=f"btn_news_{idx}"):
+                                news_items = get_trend_news_articles(tr['query'], max_articles=3)
+                                tr["news_articles"] = news_items
+                                if news_items:
+                                    st.write("**Top News Headlines:**")
+                                    for ni in news_items:
+                                        st.markdown(f"- [{ni['title']}]({ni['url']}) *({ni['source']})*")
                                 else:
-                                    st.warning("No recent YouTube videos found for this trend.")
+                                    st.caption("No immediate Google News articles found.")
+                        with c2:
+                            st.markdown("##### Content Actions")
+                            if st.button(f"🚀 Produce 6 Reels + 2 Videos (Instant Publish)", key=f"btn_pkg_{idx}", type="primary", use_container_width=True):
+                                with st.spinner(f"Producing & publishing 6 Reels + 2 Landscape Videos for '{tr['query']}'..."):
+                                    def manual_update_status(cur_q, stg, stg_name, detail, pct, s_done, v_done):
+                                        set_daemon_progress(
+                                            active=True,
+                                            current_trend=cur_q,
+                                            stage=stg,
+                                            total_stages=5,
+                                            stage_name=stg_name,
+                                            step_detail=detail,
+                                            next_step="Instant Public Publishing" if stg < 5 else "Completed",
+                                            percent=pct,
+                                            shorts_done=s_done,
+                                            videos_done=v_done
+                                        )
+                                    pkg_res = produce_trend_package(
+                                        tr,
+                                        auto_upload=is_authenticated(),
+                                        progress_callback=lambda m: push_daemon_log(f"[{tr['query']}] {m}"),
+                                        status_callback=manual_update_status
+                                    )
+                                    manual_update_status(tr['query'], 5, "Completed", f"Produced & published {pkg_res['total_rendered']} assets (6 Reels + 2 Videos)", 100, len(pkg_res.get('shorts', [])), len(pkg_res.get('landscapes', [])))
+                                    st.success(f"✓ Successfully produced and published {pkg_res['total_rendered']} assets instantly (PUBLIC) to YouTube Studio!")
+                                    st.rerun()
+
+                            if st.button(f"⚡ Clip in Tab 1 (Produce)", key=f"btn_clip_{idx}", use_container_width=True):
+                                with st.spinner(f"Searching YouTube videos for '{tr['query']}'..."):
+                                    vids = search_trend_source_videos(tr['query'], max_results=3, topic_filter=video_topic_suffix)
+                                    if vids:
+                                        top_vid = vids[0]
+                                        st.session_state["txt_raw_url"] = top_vid["url"]
+                                        st.success(f"Selected: {top_vid['title']} ({top_vid['url']})! Switched to Tab 1.")
+                                        st.rerun()
+                                    else:
+                                        st.warning("No recent YouTube videos found for this trend.")
         else:
             st.info("No trend data loaded. Click 'Scan Breakout Trends' above to fetch latest US breakout spikes.")
 

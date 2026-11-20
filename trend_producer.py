@@ -30,6 +30,12 @@ from editor import (
 )
 from uploader import upload_batch_private, is_authenticated
 from trends_hunter import get_trend_news_articles, search_trend_source_videos
+from arbiter import (
+    acquire_compute_lock,
+    release_compute_lock,
+    push_unified_log,
+    PRIORITY_TREND
+)
 
 READY_DIR = Path("ready_to_upload")
 WORKSPACE_DIR = Path("workspace")
@@ -232,6 +238,7 @@ def produce_trend_package(
         if progress_callback:
             progress_callback(msg)
         print(f"[TrendProducer] {msg}")
+        push_unified_log("TREND", msg)
 
     def update_status(stg: int, stg_name: str, detail: str, pct: int, s_done: int = 0, v_done: int = 0):
         if status_callback:
@@ -277,156 +284,162 @@ def produce_trend_package(
     rendered_shorts = []
     rendered_landscapes = []
 
-    # Step 3: Render 6 Reels (9:16) in Parallel
-    update_status(3, "Step 3/5: Rendering Reels", f"Synthesizing voiceovers & rendering 6 Shorts in parallel...", 35, 0, 0)
-    log(f"Step 3/5: Synthesizing voiceovers & rendering 6 Shorts in parallel...")
+    # Step 3 & 4: Heavy Compute Render (Reels + Landscape) via Arbiter P1 Lock
+    log("Acquiring Compute Lock (P1) for Reels & Landscape rendering...")
+    acquire_compute_lock("trend_producer", PRIORITY_TREND, f"Trend: {query[:25]}", timeout=600.0)
+    try:
+        # Step 3: Render 6 Reels (9:16) in Parallel
+        update_status(3, "Step 3/5: Rendering Reels", f"Synthesizing voiceovers & rendering 6 Shorts in parallel...", 35, 0, 0)
+        log(f"Step 3/5: Synthesizing voiceovers & rendering 6 Shorts in parallel...")
 
-    def render_single_reel(r_idx: int, item: dict) -> Optional[Path]:
-        reel_title = item.get("title", f"{query} Moment {r_idx+1}")
-        hook_txt = item.get("hook", f"⚡ {query.upper()}")
-        script_txt = item.get("script", "")
+        def render_single_reel(r_idx: int, item: dict) -> Optional[Path]:
+            reel_title = item.get("title", f"{query} Moment {r_idx+1}")
+            hook_txt = item.get("hook", f"⚡ {query.upper()}")
+            script_txt = item.get("script", "")
 
-        # Synthesize Piper TTS
-        wav_path = work_dir / f"tts_short_{r_idx}.wav"
-        generate_piper_tts(script_txt, wav_path)
-        dur = get_audio_duration(wav_path)
+            # Synthesize Piper TTS
+            wav_path = work_dir / f"tts_short_{r_idx}.wav"
+            generate_piper_tts(script_txt, wav_path)
+            dur = get_audio_duration(wav_path)
 
-        # Generate Subtitles using exact Whisper word alignment on TTS speech
-        words = extract_whisper_word_timestamps(wav_path, script_txt, dur, work_dir, r_idx)
-        ass_path = work_dir / f"subs_short_{r_idx}.ass"
-        generate_karaoke_ass(words, ass_path, clip_start_offset=0.0, style_preset="clean")
+            # Generate Subtitles using exact Whisper word alignment on TTS speech
+            words = extract_whisper_word_timestamps(wav_path, script_txt, dur, work_dir, r_idx)
+            ass_path = work_dir / f"subs_short_{r_idx}.ass"
+            generate_karaoke_ass(words, ass_path, clip_start_offset=0.0, style_preset="clean")
 
-        # Output path
-        final_mp4 = READY_DIR / f"Short_{safe_q}_{r_idx+1}_{ts}.mp4"
+            # Output path
+            final_mp4 = READY_DIR / f"Short_{safe_q}_{r_idx+1}_{ts}.mp4"
 
-        # Combine video + Piper TTS via Mode A
-        # NO phonk beat, NO pitch-shift/asetrate, NO punch whoosh sound for clean trend news
-        cut_vis = work_dir / f"vis_short_{r_idx}.mp4"
-        subprocess.run([
-            "ffmpeg", "-y",
-            "-stream_loop", "-1",
-            "-i", str(source_clip_vertical),
-            "-i", str(wav_path),
-            "-t", f"{dur:.2f}",
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-c:v", "copy",
-            "-c:a", "aac",
-            str(cut_vis)
-        ], capture_output=True)
+            # Combine video + Piper TTS via Mode A
+            # NO phonk beat, NO pitch-shift/asetrate, NO punch whoosh sound for clean trend news
+            cut_vis = work_dir / f"vis_short_{r_idx}.mp4"
+            subprocess.run([
+                "ffmpeg", "-y",
+                "-stream_loop", "-1",
+                "-i", str(source_clip_vertical),
+                "-i", str(wav_path),
+                "-t", f"{dur:.2f}",
+                "-map", "0:v:0",
+                "-map", "1:a:0",
+                "-c:v", "copy",
+                "-c:a", "aac",
+                str(cut_vis)
+            ], capture_output=True)
 
-        if not is_valid_video_file(cut_vis):
-            return None
+            if not is_valid_video_file(cut_vis):
+                return None
 
-        render_mode_a_short(
-            source_video=cut_vis,
-            ass_subtitles=ass_path,
-            output_short_path=final_mp4,
-            flagged_profanities=[],
-            split_layout=False,
-            enable_tracking=False,
-            hook_title=hook_txt,
-            enable_anti_content_id=False,  # NO pitch shift / audio speed altering
-            enable_music_ducking=False,    # NO phonk beat
-            enable_sfx=False               # NO punch / whoosh sound
-        )
-        cut_vis.unlink(missing_ok=True)
+            render_mode_a_short(
+                source_video=cut_vis,
+                ass_subtitles=ass_path,
+                output_short_path=final_mp4,
+                flagged_profanities=[],
+                split_layout=False,
+                enable_tracking=False,
+                hook_title=hook_txt,
+                enable_anti_content_id=False,  # NO pitch shift / audio speed altering
+                enable_music_ducking=False,    # NO phonk beat
+                enable_sfx=False               # NO punch / whoosh sound
+            )
+            cut_vis.unlink(missing_ok=True)
 
-        # Generate sidecar metadata JSON for YouTube Studio (Trend-specific, NO GTA6!)
-        sidecar_p = final_mp4.with_suffix(".json")
-        try:
-            with open(sidecar_p, "w", encoding="utf-8") as sf:
-                json.dump({
-                    "title": f"{reel_title} #Shorts",
-                    "description": (
-                        f"🔥 {reel_title}\n\n"
-                        f"{script_txt}\n\n"
-                        f"Latest breaking developments on {query}.\n"
-                        f"Subscribe to @zelmuesports for real-time trending updates!\n\n"
-                        f"#Shorts #Trending #{safe_q} #News"
-                    ),
-                    "tags": [query, *trend.get("trend_breakdown", [])[:4], "Trending", "News", "Breaking News", "Breakout", "Shorts"],
-                    "category_id": "25",
-                    "privacy_status": "public"
-                }, sf, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
-
-        return final_mp4
-
-    total_shorts_count = len(shorts_scripts)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-        fut_map = {pool.submit(render_single_reel, idx, item): idx for idx, item in enumerate(shorts_scripts)}
-        for fut in concurrent.futures.as_completed(fut_map):
-            res_p = fut.result()
-            if res_p and res_p.exists() and res_p.stat().st_size > 102400:
-                rendered_shorts.append(res_p)
-                done_cnt = len(rendered_shorts)
-                step_pct = 35 + int((done_cnt / max(1, total_shorts_count)) * 35)
-                update_status(3, f"Step 3/5: Rendering Reels ({done_cnt}/{total_shorts_count})", f"Rendered Reel {done_cnt}/{total_shorts_count}: '{res_p.name}' via Intel QSV...", step_pct, done_cnt, 0)
-                log(f"✓ Rendered Short: {res_p.name}")
-
-    # Step 4: Render 2 Landscape Videos (16:9)
-    update_status(4, "Step 4/5: Rendering Landscape", "Synthesizing voiceovers & rendering 2 Landscape videos...", 72, len(rendered_shorts), 0)
-    log(f"Step 4/5: Synthesizing voiceovers & rendering 2 Landscape videos...")
-    ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
-    font_f = get_windows_font("ariblk.ttf")
-    f_arg = f"fontfile='{font_f}':" if font_f else ""
-    clean_header = "".join(c for c in query.upper() if c.isalnum() or c.isspace())[:30]
-
-    for l_idx, l_item in enumerate(landscapes_scripts):
-        l_title = l_item.get("title", f"{query} Breakdown {l_idx+1}")
-        l_script = l_item.get("script", "")
-
-        wav_path = work_dir / f"tts_land_{l_idx}.wav"
-        generate_piper_tts(l_script, wav_path)
-        dur = get_audio_duration(wav_path)
-
-        final_land_mp4 = READY_DIR / f"Video_{safe_q}_{l_idx+1}_{ts}.mp4"
-
-        # Render 16:9 Landscape Video with looped visual background
-        vf_filter = (
-            f"scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
-            f"drawtext={f_arg}text='{clean_header} BREAKDOWN':fontsize=42:fontcolor=white:box=1:boxcolor=black@0.75:x=(w-text_w)/2:y=80"
-        )
-        land_cmd = [
-            ffmpeg_bin, "-y",
-            "-stream_loop", "-1",
-            "-i", str(source_clip_landscape),
-            "-i", str(wav_path),
-            "-t", f"{dur:.2f}",
-            "-vf", vf_filter,
-            *get_best_video_encoder(),
-            "-c:a", "aac",
-            "-b:a", "192k",
-            str(final_land_mp4)
-        ]
-        res = subprocess.run(land_cmd, capture_output=True)
-        if res.returncode == 0 and is_valid_video_file(final_land_mp4):
             # Generate sidecar metadata JSON for YouTube Studio (Trend-specific, NO GTA6!)
-            sidecar_land = final_land_mp4.with_suffix(".json")
+            sidecar_p = final_mp4.with_suffix(".json")
             try:
-                with open(sidecar_land, "w", encoding="utf-8") as sf:
+                with open(sidecar_p, "w", encoding="utf-8") as sf:
                     json.dump({
-                        "title": f"{l_title} (Full Breakdown)",
+                        "title": f"{reel_title} #Shorts",
                         "description": (
-                            f"The full breakdown of {query}.\n\n"
-                            f"{l_script}\n\n"
-                            f"Subscribe to @zelmuesports for daily in-depth breakdowns on unfolding stories across the United States.\n\n"
-                            f"#Trending #{safe_q} #News #DeepDive"
+                            f"🔥 {reel_title}\n\n"
+                            f"{script_txt}\n\n"
+                            f"Latest breaking developments on {query}.\n"
+                            f"Subscribe to @zelmuesports for real-time trending updates!\n\n"
+                            f"#Shorts #Trending #{safe_q} #News"
                         ),
-                        "tags": [query, *trend.get("trend_breakdown", [])[:4], "Deep Dive", "Explained", "Trending", "News", "United States"],
+                        "tags": [query, *trend.get("trend_breakdown", [])[:4], "Trending", "News", "Breaking News", "Breakout", "Shorts"],
                         "category_id": "25",
                         "privacy_status": "public"
                     }, sf, indent=2, ensure_ascii=False)
             except Exception:
                 pass
 
-            rendered_landscapes.append(final_land_mp4)
-            v_done_cnt = len(rendered_landscapes)
-            l_pct = 72 + int((v_done_cnt / 2) * 18)
-            update_status(4, f"Step 4/5: Rendering Landscape ({v_done_cnt}/2)", f"Rendered Landscape Video {v_done_cnt}/2: '{final_land_mp4.name}'...", l_pct, len(rendered_shorts), v_done_cnt)
-            log(f"✓ Rendered Landscape Video: {final_land_mp4.name}")
+            return final_mp4
+
+        total_shorts_count = len(shorts_scripts)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            fut_map = {pool.submit(render_single_reel, idx, item): idx for idx, item in enumerate(shorts_scripts)}
+            for fut in concurrent.futures.as_completed(fut_map):
+                res_p = fut.result()
+                if res_p and res_p.exists() and res_p.stat().st_size > 102400:
+                    rendered_shorts.append(res_p)
+                    done_cnt = len(rendered_shorts)
+                    step_pct = 35 + int((done_cnt / max(1, total_shorts_count)) * 35)
+                    update_status(3, f"Step 3/5: Rendering Reels ({done_cnt}/{total_shorts_count})", f"Rendered Reel {done_cnt}/{total_shorts_count}: '{res_p.name}' via Intel QSV...", step_pct, done_cnt, 0)
+                    log(f"✓ Rendered Short: {res_p.name}")
+
+        # Step 4: Render 2 Landscape Videos (16:9)
+        update_status(4, "Step 4/5: Rendering Landscape", "Synthesizing voiceovers & rendering 2 Landscape videos...", 72, len(rendered_shorts), 0)
+        log(f"Step 4/5: Synthesizing voiceovers & rendering 2 Landscape videos...")
+        ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
+        font_f = get_windows_font("ariblk.ttf")
+        f_arg = f"fontfile='{font_f}':" if font_f else ""
+        clean_header = "".join(c for c in query.upper() if c.isalnum() or c.isspace())[:30]
+
+        for l_idx, l_item in enumerate(landscapes_scripts):
+            l_title = l_item.get("title", f"{query} Breakdown {l_idx+1}")
+            l_script = l_item.get("script", "")
+
+            wav_path = work_dir / f"tts_land_{l_idx}.wav"
+            generate_piper_tts(l_script, wav_path)
+            dur = get_audio_duration(wav_path)
+
+            final_land_mp4 = READY_DIR / f"Video_{safe_q}_{l_idx+1}_{ts}.mp4"
+
+            # Render 16:9 Landscape Video with looped visual background
+            vf_filter = (
+                f"scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
+                f"drawtext={f_arg}text='{clean_header} BREAKDOWN':fontsize=42:fontcolor=white:box=1:boxcolor=black@0.75:x=(w-text_w)/2:y=80"
+            )
+            land_cmd = [
+                ffmpeg_bin, "-y",
+                "-stream_loop", "-1",
+                "-i", str(source_clip_landscape),
+                "-i", str(wav_path),
+                "-t", f"{dur:.2f}",
+                "-vf", vf_filter,
+                *get_best_video_encoder(),
+                "-c:a", "aac",
+                "-b:a", "192k",
+                str(final_land_mp4)
+            ]
+            res = subprocess.run(land_cmd, capture_output=True)
+            if res.returncode == 0 and is_valid_video_file(final_land_mp4):
+                # Generate sidecar metadata JSON for YouTube Studio (Trend-specific, NO GTA6!)
+                sidecar_land = final_land_mp4.with_suffix(".json")
+                try:
+                    with open(sidecar_land, "w", encoding="utf-8") as sf:
+                        json.dump({
+                            "title": f"{l_title} (Full Breakdown)",
+                            "description": (
+                                f"The full breakdown of {query}.\n\n"
+                                f"{l_script}\n\n"
+                                f"Subscribe to @zelmuesports for daily in-depth breakdowns on unfolding stories across the United States.\n\n"
+                                f"#Trending #{safe_q} #News #DeepDive"
+                            ),
+                            "tags": [query, *trend.get("trend_breakdown", [])[:4], "Deep Dive", "Explained", "Trending", "News", "United States"],
+                            "category_id": "25",
+                            "privacy_status": "public"
+                        }, sf, indent=2, ensure_ascii=False)
+                except Exception:
+                    pass
+
+                rendered_landscapes.append(final_land_mp4)
+                v_done_cnt = len(rendered_landscapes)
+                l_pct = 72 + int((v_done_cnt / 2) * 18)
+                update_status(4, f"Step 4/5: Rendering Landscape ({v_done_cnt}/2)", f"Rendered Landscape Video {v_done_cnt}/2: '{final_land_mp4.name}'...", l_pct, len(rendered_shorts), v_done_cnt)
+                log(f"✓ Rendered Landscape Video: {final_land_mp4.name}")
+    finally:
+        release_compute_lock("trend_producer")
 
     # Step 5: Instant Public Upload to Studio
     all_rendered = rendered_shorts + rendered_landscapes
