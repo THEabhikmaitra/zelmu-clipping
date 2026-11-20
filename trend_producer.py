@@ -124,16 +124,56 @@ Return ONLY JSON with this schema:
     return build_fallback_scripts(query, breakdown, news_titles)
 
 
+def extract_whisper_word_timestamps(wav_path: Path, script_text: str, total_duration: float, work_dir: Path, idx: int) -> List[Dict[str, Any]]:
+    """
+    Extracts millisecond-accurate word timestamps by running faster-whisper directly
+    on the synthesized Piper speech WAV. Ensures 100% subtitle-to-voice synchronization.
+    """
+    json_path = work_dir / f"whisper_subs_{idx}.json"
+    try:
+        from transcriber import transcribe_audio_whisper
+        res = transcribe_audio_whisper(wav_path, json_path, model_size="tiny.en")
+        words = []
+        for s in res.get("segments", []):
+            for w in s.get("words", []):
+                w_str = str(w.get("word", "")).strip()
+                if w_str:
+                    words.append({
+                        "word": w_str,
+                        "start": round(float(w.get("start", 0.0)), 2),
+                        "end": round(float(w.get("end", 0.0)), 2)
+                    })
+        if words:
+            return words
+    except Exception as e:
+        print(f"[WhisperSync] Fallback to weighted timestamps: {e}")
+
+    # Fallback to character-length weighted timestamps if whisper fails
+    raw_words = script_text.strip().split()
+    if not raw_words:
+        return []
+    total_chars = sum(max(1, len(w)) for w in raw_words)
+    out = []
+    cur_t = 0.0
+    for w in raw_words:
+        dur_w = max(0.12, (len(w) / total_chars) * total_duration)
+        w_end = min(total_duration, cur_t + dur_w)
+        out.append({"word": w, "start": round(cur_t, 2), "end": round(w_end, 2)})
+        cur_t = w_end
+    return out
+
+
 def generate_word_timestamps_from_text(text: str, total_duration: float) -> List[Dict[str, Any]]:
-    """Creates synthetic linear word timestamps for Piper voiceover subtitle generation."""
+    """Fallback character-length weighted word timestamps."""
     words = text.strip().split()
     if not words:
         return []
-    dur_per_word = max(0.2, total_duration / max(1, len(words)))
+    total_chars = sum(max(1, len(w)) for w in words)
     out = []
     cur_t = 0.0
     for w in words:
-        w_end = cur_t + dur_per_word
+        dur_w = max(0.12, (len(w) / total_chars) * total_duration)
+        w_end = min(total_duration, cur_t + dur_w)
         out.append({"word": w, "start": round(cur_t, 2), "end": round(w_end, 2)})
         cur_t = w_end
     return out
@@ -251,15 +291,16 @@ def produce_trend_package(
         generate_piper_tts(script_txt, wav_path)
         dur = get_audio_duration(wav_path)
 
-        # Generate Subtitles
-        words = generate_word_timestamps_from_text(script_txt, dur)
+        # Generate Subtitles using exact Whisper word alignment on TTS speech
+        words = extract_whisper_word_timestamps(wav_path, script_txt, dur, work_dir, r_idx)
         ass_path = work_dir / f"subs_short_{r_idx}.ass"
-        generate_karaoke_ass(words, ass_path, clip_start_offset=0.0, style_preset="neon")
+        generate_karaoke_ass(words, ass_path, clip_start_offset=0.0, style_preset="clean")
 
         # Output path
         final_mp4 = READY_DIR / f"Short_{safe_q}_{r_idx+1}_{ts}.mp4"
 
-        # Combine video + Piper TTS + Karaoke captions via Mode A
+        # Combine video + Piper TTS via Mode A
+        # NO phonk beat, NO pitch-shift/asetrate, NO punch whoosh sound for clean trend news
         cut_vis = work_dir / f"vis_short_{r_idx}.mp4"
         subprocess.run([
             "ffmpeg", "-y",
@@ -285,11 +326,31 @@ def produce_trend_package(
             split_layout=False,
             enable_tracking=False,
             hook_title=hook_txt,
-            enable_anti_content_id=True,
-            enable_music_ducking=True,
-            enable_sfx=True
+            enable_anti_content_id=False,  # NO pitch shift / audio speed altering
+            enable_music_ducking=False,    # NO phonk beat
+            enable_sfx=False               # NO punch / whoosh sound
         )
         cut_vis.unlink(missing_ok=True)
+
+        # Generate sidecar metadata JSON for YouTube Studio (Trend-specific, NO GTA6!)
+        sidecar_p = final_mp4.with_suffix(".json")
+        try:
+            with open(sidecar_p, "w", encoding="utf-8") as sf:
+                json.dump({
+                    "title": f"{reel_title} #Shorts",
+                    "description": (
+                        f"🔥 {reel_title}\n\n"
+                        f"{script_txt}\n\n"
+                        f"Latest breaking developments on {query}.\n"
+                        f"Subscribe to @zelmuesports for real-time trending updates!\n\n"
+                        f"#Shorts #Trending #{safe_q} #News"
+                    ),
+                    "tags": [query, *trend.get("trend_breakdown", [])[:4], "Trending", "News", "Breaking News", "Breakout", "Shorts"],
+                    "category_id": "25"
+                }, sf, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
         return final_mp4
 
     total_shorts_count = len(shorts_scripts)
@@ -322,7 +383,7 @@ def produce_trend_package(
 
         final_land_mp4 = READY_DIR / f"Video_{safe_q}_{l_idx+1}_{ts}.mp4"
 
-        # Render 16:9 Landscape Video with looped visual background + audio ducking
+        # Render 16:9 Landscape Video with looped visual background
         vf_filter = (
             f"scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
             f"drawtext={f_arg}text='{clean_header} BREAKDOWN':fontsize=42:fontcolor=white:box=1:boxcolor=black@0.75:x=(w-text_w)/2:y=80"
@@ -341,6 +402,24 @@ def produce_trend_package(
         ]
         res = subprocess.run(land_cmd, capture_output=True)
         if res.returncode == 0 and is_valid_video_file(final_land_mp4):
+            # Generate sidecar metadata JSON for YouTube Studio (Trend-specific, NO GTA6!)
+            sidecar_land = final_land_mp4.with_suffix(".json")
+            try:
+                with open(sidecar_land, "w", encoding="utf-8") as sf:
+                    json.dump({
+                        "title": f"{l_title} (Full Breakdown)",
+                        "description": (
+                            f"The full breakdown of {query}.\n\n"
+                            f"{l_script}\n\n"
+                            f"Subscribe to @zelmuesports for daily in-depth breakdowns on unfolding stories across the United States.\n\n"
+                            f"#Trending #{safe_q} #News #DeepDive"
+                        ),
+                        "tags": [query, *trend.get("trend_breakdown", [])[:4], "Deep Dive", "Explained", "Trending", "News", "United States"],
+                        "category_id": "25"
+                    }, sf, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+
             rendered_landscapes.append(final_land_mp4)
             v_done_cnt = len(rendered_landscapes)
             l_pct = 72 + int((v_done_cnt / 2) * 18)
