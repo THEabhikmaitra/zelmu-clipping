@@ -873,25 +873,17 @@ def upload_single_video(
     import gc
     gc.collect()
 
-    # Move to uploaded_archive directory
-    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-    dest_path = ARCHIVE_DIR / file_path.name
+    # Permanently delete video file from disk upon confirmed upload/schedule success
     try:
-        if dest_path.exists():
-            dest_path.unlink()
-        shutil.move(str(file_path), str(dest_path))
-    except (PermissionError, OSError):
-        try:
-            shutil.copy2(str(file_path), str(dest_path))
+        if file_path.exists():
             file_path.unlink()
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     return {
         "video_id": video_id,
         "title": full_title,
         "studio_url": f"https://studio.youtube.com/video/{video_id}/edit",
-        "archive_path": str(dest_path),
         "file_size_mb": file_size_mb,
         "upload_sec": total_duration,
         "speed_mbps": avg_speed_mbps
@@ -953,7 +945,6 @@ def upload_batch_private(
     import threading
 
     READY_DIR.mkdir(parents=True, exist_ok=True)
-    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 
     video_files = sorted(list(READY_DIR.glob("*.mp4")))
     if not video_files:

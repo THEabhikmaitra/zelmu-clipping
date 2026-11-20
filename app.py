@@ -74,8 +74,7 @@ from uploader import (
     TOKEN_FILE,
     TOKENS_DIR,
     LOG_FILE,
-    READY_DIR,
-    ARCHIVE_DIR
+    READY_DIR
 )
 from watcher import (
     load_watcher_config,
@@ -99,7 +98,6 @@ from livestream_buffer import (
 # Ensure base directories exist
 WORKSPACE_DIR = Path("workspace")
 READY_DIR.mkdir(parents=True, exist_ok=True)
-ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Page configuration
