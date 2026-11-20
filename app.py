@@ -1639,7 +1639,7 @@ with tab2:
         total_mb = df["File_Size_MB"].sum() if "File_Size_MB" in df.columns else 0.0
         avg_speed = df["Speed_MBps"].mean() if "Speed_MBps" in df.columns else 0.0
         # Calculate daily uploads (today) matching GCP Quota metric
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        today_str = datetime.date.today().strftime("%Y-%m-%d")
         today_uploads = len(df[df["Timestamp"].astype(str).str.startswith(today_str)]) if "Timestamp" in df.columns else total_uploads
         
         auth_slots_cnt = max(1, len([s for s in list_account_slots() if s["is_authenticated"]]))
