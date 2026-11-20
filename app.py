@@ -1037,6 +1037,10 @@ with tab1:
                                 enable_sfx=enable_sfx
                             )
                             push_log(f"✓ Rendered: {final_dest.name}")
+                            # Auto-purge raw cuts immediately to eliminate SSD I/O drag
+                            raw_seg.unlink(missing_ok=True)
+                            for p in segments_dir.glob(f"seg_raw_{c_idx}.*"):
+                                p.unlink(missing_ok=True)
                             return final_dest
 
                         render_labor_card(
@@ -1134,6 +1138,9 @@ with tab1:
                                 logo_path=active_logo_path
                             )
                             push_log(f"Rendered: {final_dest.name}")
+                            for c_path in downloaded_clips:
+                                if c_path and Path(c_path).exists():
+                                    Path(c_path).unlink(missing_ok=True)
                         else:
                             push_log(f"Transformative Short '{comp_title}' already exists.")
                 except (StopException, RerunException):

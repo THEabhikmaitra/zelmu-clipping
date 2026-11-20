@@ -507,6 +507,9 @@ def process_video_autonomous(
             hook_title=cand.get("title", "GTA 6 INSANE MOMENT") if enable_hook_badge else None
         )
         push_watcher_log(f"✓ Rendered autonomous short: {final_dest.name}")
+        raw_seg.unlink(missing_ok=True)
+        for p in segments_dir.glob(f"seg_raw_{c_idx}.*"):
+            p.unlink(missing_ok=True)
         return final_dest
 
     pool_workers = min(3, max(1, total_cands))

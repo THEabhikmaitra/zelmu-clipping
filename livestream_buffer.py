@@ -421,6 +421,9 @@ def process_livestream_slice(
             hook_title="🔴 LIVE HIGHLIGHT" if enable_hook_badge else None
         )
         push_live_log(f"✓ [Stage 4/5] Rendered Live Short: {final_dest.name}")
+        raw_seg.unlink(missing_ok=True)
+        for p in segments_dir.glob(f"live_seg_{c_idx}.*"):
+            p.unlink(missing_ok=True)
         return final_dest
 
     pool_workers = min(3, max(1, len(candidates)))
