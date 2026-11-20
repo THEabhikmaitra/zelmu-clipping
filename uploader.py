@@ -976,12 +976,14 @@ def upload_batch_private(
     auto_schedule: bool = False,
     slots_per_day: int = 6,
     concurrency: int = 2,
+    privacy_mode: str = "private",  # "private", "public", or "scheduled"
     progress_callback=None,
     chunk_callback=None,
     log_callback=None
 ) -> List[Dict[str, Any]]:
     """
-    Uploads up to max_batch_size videos from ./ready_to_upload/ to YouTube as Private/Scheduled.
+    Uploads up to max_batch_size videos from ./ready_to_upload/ to YouTube.
+    Supports instant public publishing (privacy_mode="public") or scheduled deployment.
     If concurrency > 1, streams multiple videos in parallel to saturate upload bandwidth.
     Calculates live aggregate network speed, bytes sent, ETA, and progress.
     Safely captures quota limits without losing un-uploaded video files.
@@ -996,7 +998,11 @@ def upload_batch_private(
         return []
 
     batch = video_files[:max_batch_size]
-    slots = calculate_monetization_schedule_slots(len(batch), slots_per_day=slots_per_day) if auto_schedule else [None] * len(batch)
+    # If instant public publish is active, disable scheduling delay
+    if privacy_mode == "public":
+        slots = [None] * len(batch)
+    else:
+        slots = calculate_monetization_schedule_slots(len(batch), slots_per_day=slots_per_day) if auto_schedule else [None] * len(batch)
 
     results = []
     total_count = len(batch)
@@ -1090,6 +1096,8 @@ def upload_batch_private(
         desc_val = sidecar_meta.get("description", "")
         tags_val = sidecar_meta.get("tags", None)
         cat_val = sidecar_meta.get("category_id", "25" if ("trend" in video_path.name.lower() or "short_" in video_path.name.lower() or "video_" in video_path.name.lower()) else "20")
+        privacy_val = sidecar_meta.get("privacy_status", privacy_mode)
+        target_pub_time = pub_time if privacy_val != "public" else None
 
         try:
             res = upload_single_video(
@@ -1099,7 +1107,8 @@ def upload_batch_private(
                 description=desc_val,
                 tags=tags_val,
                 category_id=cat_val,
-                publish_at=pub_time,
+                publish_at=target_pub_time,
+                privacy_status=privacy_val,
                 chunk_callback=on_chunk
             )
             with lock:
@@ -1108,11 +1117,16 @@ def upload_batch_private(
                 if file_name in active_transfers:
                     del active_transfers[file_name]
 
-            if pub_time:
-                res["publish_at"] = pub_time
+            if target_pub_time:
+                res["publish_at"] = target_pub_time
 
             if log_callback:
-                sched_msg = f" (Scheduled: {pub_time})" if pub_time else " (Private)"
+                if privacy_val == "public" and not target_pub_time:
+                    sched_msg = " (PUBLIC - Instant Publish)"
+                elif target_pub_time:
+                    sched_msg = f" (Scheduled: {target_pub_time})"
+                else:
+                    sched_msg = f" ({privacy_val.title()})"
                 log_callback(f"✓ [{idx+1}/{total_count}] Uploaded: {res['title']}{sched_msg} | {res['speed_mbps']:.1f} Mbps | ID: {res['video_id']}")
 
             return res
@@ -1148,7 +1162,8 @@ def upload_batch_private(
                         description=desc_val,
                         tags=tags_val,
                         category_id=cat_val,
-                        publish_at=pub_time,
+                        publish_at=target_pub_time,
+                        privacy_status=privacy_val,
                         chunk_callback=on_chunk
                     )
                 else:

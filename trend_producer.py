@@ -346,7 +346,8 @@ def produce_trend_package(
                         f"#Shorts #Trending #{safe_q} #News"
                     ),
                     "tags": [query, *trend.get("trend_breakdown", [])[:4], "Trending", "News", "Breaking News", "Breakout", "Shorts"],
-                    "category_id": "25"
+                    "category_id": "25",
+                    "privacy_status": "public"
                 }, sf, indent=2, ensure_ascii=False)
         except Exception:
             pass
@@ -415,7 +416,8 @@ def produce_trend_package(
                             f"#Trending #{safe_q} #News #DeepDive"
                         ),
                         "tags": [query, *trend.get("trend_breakdown", [])[:4], "Deep Dive", "Explained", "Trending", "News", "United States"],
-                        "category_id": "25"
+                        "category_id": "25",
+                        "privacy_status": "public"
                     }, sf, indent=2, ensure_ascii=False)
             except Exception:
                 pass
@@ -426,16 +428,16 @@ def produce_trend_package(
             update_status(4, f"Step 4/5: Rendering Landscape ({v_done_cnt}/2)", f"Rendered Landscape Video {v_done_cnt}/2: '{final_land_mp4.name}'...", l_pct, len(rendered_shorts), v_done_cnt)
             log(f"✓ Rendered Landscape Video: {final_land_mp4.name}")
 
-    # Step 5: Auto-Schedule to Studio
+    # Step 5: Instant Public Upload to Studio
     all_rendered = rendered_shorts + rendered_landscapes
     upload_results = []
     if auto_upload and all_rendered and is_authenticated():
-        update_status(5, "Step 5/5: Studio Scheduling", f"Auto-scheduling {len(all_rendered)} assets across peak monetization slots...", 92, len(rendered_shorts), len(rendered_landscapes))
-        log(f"Step 5/5: Auto-scheduling {len(all_rendered)} assets ({len(rendered_shorts)} Shorts + {len(rendered_landscapes)} Videos) across peak monetization slots...")
-        upload_results = upload_batch_private(max_batch_size=len(all_rendered), auto_schedule=True, log_callback=log)
+        update_status(5, "Step 5/5: Publishing Instantly", f"Publishing {len(all_rendered)} assets instantly to YouTube Studio (Public)...", 92, len(rendered_shorts), len(rendered_landscapes))
+        log(f"Step 5/5: Publishing {len(all_rendered)} assets ({len(rendered_shorts)} Shorts + {len(rendered_landscapes)} Videos) instantly (PUBLIC) to YouTube Studio...")
+        upload_results = upload_batch_private(max_batch_size=len(all_rendered), auto_schedule=False, privacy_mode="public", log_callback=log)
 
-    update_status(5, "Completed", f"Successfully produced {len(rendered_shorts)} Reels + {len(rendered_landscapes)} Videos for '{query}'.", 100, len(rendered_shorts), len(rendered_landscapes))
-    log(f"🎉 Completed! Generated {len(rendered_shorts)} Shorts + {len(rendered_landscapes)} Landscape Videos from '{query}'.")
+    update_status(5, "Completed", f"Successfully produced & published {len(rendered_shorts)} Reels + {len(rendered_landscapes)} Videos for '{query}'.", 100, len(rendered_shorts), len(rendered_landscapes))
+    log(f"🎉 Completed! Generated & published {len(rendered_shorts)} Shorts + {len(rendered_landscapes)} Landscape Videos instantly from '{query}'.")
     return {
         "query": query,
         "shorts": [str(p) for p in rendered_shorts],

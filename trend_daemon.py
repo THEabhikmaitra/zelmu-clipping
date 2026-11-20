@@ -204,7 +204,7 @@ def daemon_loop():
                     total_stages=5,
                     stage_name=stg_name,
                     step_detail=detail,
-                    next_step="Studio Scheduling" if stg < 5 else "Next Polling Cycle",
+                    next_step="Instant Public Publishing" if stg < 5 else "Next Polling Cycle",
                     percent=pct,
                     shorts_done=s_done,
                     videos_done=v_done

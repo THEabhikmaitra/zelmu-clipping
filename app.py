@@ -2076,8 +2076,8 @@ with tab5:
                                 st.caption("No immediate Google News articles found.")
                     with c2:
                         st.markdown("##### Content Actions")
-                        if st.button(f"🚀 Produce 6 Reels + 2 Videos", key=f"btn_pkg_{idx}", type="primary", use_container_width=True):
-                            with st.spinner(f"Producing 6 Reels + 2 Landscape Videos for '{tr['query']}'..."):
+                        if st.button(f"🚀 Produce 6 Reels + 2 Videos (Instant Publish)", key=f"btn_pkg_{idx}", type="primary", use_container_width=True):
+                            with st.spinner(f"Producing & publishing 6 Reels + 2 Landscape Videos for '{tr['query']}'..."):
                                 def manual_update_status(cur_q, stg, stg_name, detail, pct, s_done, v_done):
                                     set_daemon_progress(
                                         active=True,
@@ -2086,7 +2086,7 @@ with tab5:
                                         total_stages=5,
                                         stage_name=stg_name,
                                         step_detail=detail,
-                                        next_step="Studio Scheduling" if stg < 5 else "Completed",
+                                        next_step="Instant Public Publishing" if stg < 5 else "Completed",
                                         percent=pct,
                                         shorts_done=s_done,
                                         videos_done=v_done
@@ -2097,8 +2097,8 @@ with tab5:
                                     progress_callback=lambda m: push_daemon_log(f"[{tr['query']}] {m}"),
                                     status_callback=manual_update_status
                                 )
-                                manual_update_status(tr['query'], 5, "Completed", f"Produced {pkg_res['total_rendered']} assets (6 Reels + 2 Videos)", 100, len(pkg_res.get('shorts', [])), len(pkg_res.get('landscapes', [])))
-                                st.success(f"✓ Successfully produced {pkg_res['total_rendered']} assets! (6 Reels + 2 Videos).")
+                                manual_update_status(tr['query'], 5, "Completed", f"Produced & published {pkg_res['total_rendered']} assets (6 Reels + 2 Videos)", 100, len(pkg_res.get('shorts', [])), len(pkg_res.get('landscapes', [])))
+                                st.success(f"✓ Successfully produced and published {pkg_res['total_rendered']} assets instantly (PUBLIC) to YouTube Studio!")
                                 st.rerun()
 
                         if st.button(f"⚡ Clip in Tab 1 (Produce)", key=f"btn_clip_{idx}", use_container_width=True):
@@ -2121,19 +2121,19 @@ with tab5:
         d_running = is_trend_daemon_running()
 
         if d_running:
-            st.success("🟢 **Autonomous Daemon Active:** Polling US breakout trends 24/7. Auto-producing 6 Reels + 2 Videos.")
+            st.success("🟢 **Autonomous Daemon Active:** Polling US breakout trends 24/7. Auto-producing 6 Reels + 2 Videos & publishing instantly (PUBLIC).")
             if st.button("⏹️ Stop Trend Daemon", use_container_width=True, type="secondary", key="btn_stop_trend_daemon"):
                 stop_trend_daemon()
                 st.rerun()
         else:
-            st.warning("⚪ **Autonomous Daemon Idle:** Start background daemon to scan and produce 24/7.")
+            st.warning("⚪ **Autonomous Daemon Idle:** Start background daemon to scan, produce, and publish 24/7.")
             if st.button("🚀 Start Autonomous Trend Worker", use_container_width=True, type="primary", key="btn_start_trend_daemon"):
                 start_trend_daemon()
                 st.rerun()
 
         with st.expander("⚙️ Daemon Configuration", expanded=False):
             d_poll = st.number_input("Poll Interval (seconds)", min_value=60, max_value=3600, value=int(d_cfg.get("poll_interval_sec", 300)), step=60, key="cfg_daemon_poll")
-            d_autoup = st.checkbox("Auto-Schedule to YouTube Studio", value=bool(d_cfg.get("auto_upload", True)), key="cfg_daemon_autoup")
+            d_autoup = st.checkbox("Auto-Publish Instantly to YouTube Studio (Public)", value=bool(d_cfg.get("auto_upload", True)), key="cfg_daemon_autoup")
             if st.button("💾 Save Daemon Settings", key="btn_save_daemon_cfg", use_container_width=True):
                 d_cfg["poll_interval_sec"] = d_poll
                 d_cfg["auto_upload"] = d_autoup
