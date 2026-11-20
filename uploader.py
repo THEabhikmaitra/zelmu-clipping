@@ -201,11 +201,13 @@ def list_account_slots() -> List[Dict[str, Any]]:
 
 def add_account_slot(
     secrets_source: Any,
-    slot_id: Optional[str] = None
+    slot_id: Optional[str] = None,
+    custom_name: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Adds a new client_secrets JSON into tokens/ and pairs it with token_{slot_id}.json.
     Accepts file path, raw bytes, string, or parsed dict.
+    Supports multi-file batch additions with custom_name.
     """
     TOKENS_DIR.mkdir(parents=True, exist_ok=True)
     if isinstance(secrets_source, dict):
@@ -232,11 +234,22 @@ def add_account_slot(
     existing_slots = {s["slot_id"] for s in list_account_slots()}
 
     if not slot_id:
-        if proj_id:
+        candidate_id = ""
+        if custom_name:
+            stem = Path(custom_name).stem
+            if stem.lower().startswith("client_secrets_"):
+                candidate_id = stem[len("client_secrets_"):].strip()
+            elif stem.lower().startswith("client_secret_"):
+                candidate_id = stem[len("client_secret_"):].strip()
+            elif stem.lower().startswith("client_secrets"):
+                candidate_id = stem[len("client_secrets"):].strip()
+            else:
+                candidate_id = stem
+            candidate_id = re.sub(r'[^a-zA-Z0-9_-]', '', candidate_id).lower()
+
+        if not candidate_id and proj_id:
             candidate_id = re.sub(r'[^a-zA-Z0-9_-]', '', proj_id).lower()
-        else:
-            candidate_id = ""
-        
+
         if candidate_id and candidate_id not in existing_slots and candidate_id != "default":
             slot_id = candidate_id
         else:
@@ -253,9 +266,11 @@ def add_account_slot(
     with open(target_sec, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
+    display_name = custom_name if custom_name else (f"Slot ({proj_id})" if proj_id else f"Slot ({slot_id})")
+
     return {
         "slot_id": slot_id,
-        "name": f"Slot ({slot_id})",
+        "name": display_name,
         "secrets_path": target_sec,
         "token_path": target_tok,
         "project_id": proj_id or slot_id,
