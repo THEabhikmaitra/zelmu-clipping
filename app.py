@@ -1238,9 +1238,9 @@ with tab2:
     with col1:
         st.metric("Ready in Queue", f"{len(ready_videos)} clips")
         if len(auth_slots) > 1:
-            st.caption(f"⚡ Multi-Project Quota: {pool_quota:,} units across {len(auth_slots)} projects")
-        elif len(ready_videos) > 6:
-            st.caption("Standard GCP quota: 10,000 units (~6 uploads/day)")
+            st.caption(f"⚡ Multi-Project Quota: {len(auth_slots) * 100} uploads/day across {len(auth_slots)} projects")
+        elif len(ready_videos) > 100:
+            st.caption("Standard GCP quota: 100 uploads/day (10,000 queries/day)")
 
     with col2:
         if not CLIENT_SECRETS_FILE.exists() and not configured_slots:
@@ -1266,37 +1266,37 @@ with tab2:
         <div style="background: rgba(37, 99, 235, 0.08); border: 1px solid rgba(37, 99, 235, 0.25); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px;">
             <div style="font-weight: 700; color: #60a5fa; margin-bottom: 4px;">Scale Beyond 10k Daily YouTube Upload Quota</div>
             <div style="font-size: 0.84rem; color: #94a3b8; line-height: 1.45;">
-                Every standard Google Cloud project receives <b>10,000 quota units/day</b> (~6 Shorts at 1,600 units/insert).
-                By creating additional GCP projects authorized against <b>@zelmuesports</b> and dropping their <code>client_secrets_*.json</code> files here,
-                the uploader seamlessly rotates across slots on <code>quotaExceeded</code> limits (10k + 10k + 10k = 30k&ndash;60k+ units/day) without interrupting your upload queue.
+                Every standard Google Cloud project receives <b>100 Video Uploads/day</b> and <b>10,000 queries/day</b>.
+                By adding additional GCP projects authorized against <b>@zelmuesports</b> and dropping their <code>client_secrets_*.json</code> files here,
+                the uploader seamlessly rotates across slots on quota limits (100 + 100 + 100 = 300+ uploads/day) without interrupting your queue.
             </div>
         </div>
         """, unsafe_allow_html=True)
 
         # Multi-Project Capacity Dashboard
-        total_slots_cnt = len(configured_slots)
-        auth_slots_cnt = len(auth_slots)
+        total_slots_cnt = max(1, len(configured_slots))
+        auth_slots_cnt = max(1, len(auth_slots))
+        max_daily_shorts = total_slots_cnt * 100
+        active_daily_shorts = auth_slots_cnt * 100
         total_units_pool = total_slots_cnt * 10000
         active_units_pool = auth_slots_cnt * 10000
-        max_daily_shorts = total_slots_cnt * 6
-        active_daily_shorts = auth_slots_cnt * 6
 
         dash_c1, dash_c2, dash_c3, dash_c4 = st.columns(4)
         with dash_c1:
             st.metric("Total Slots Configured", f"{total_slots_cnt} Projects", help="Total GCP project slots registered in local pool.")
         with dash_c2:
             st.metric(
-                "Total Daily Units Pool",
-                f"{total_units_pool:,} units",
-                delta=f"{active_units_pool:,} active" if total_slots_cnt != auth_slots_cnt else None,
-                help="10,000 units per project slot. Auto-rotates sequentially when quota hits."
+                "Max Daily Upload Capacity",
+                f"{max_daily_shorts} Shorts/day",
+                delta=f"{active_daily_shorts} active" if total_slots_cnt != auth_slots_cnt else None,
+                help="GCP YouTube Data API limit: 100 Video Uploads per day per project."
             )
         with dash_c3:
             st.metric(
-                "Max Daily Shorts Capacity",
-                f"{max_daily_shorts} Shorts/day",
-                delta=f"{active_daily_shorts} active" if total_slots_cnt != auth_slots_cnt else None,
-                help="Capacity based on ~6 Shorts per project slot (1,600 units/insert)."
+                "Total Daily Queries Pool",
+                f"{total_units_pool:,} queries",
+                delta=f"{active_units_pool:,} active" if total_slots_cnt != auth_slots_cnt else None,
+                help="10,000 queries per day per project slot. Auto-rotates sequentially when quota hits."
             )
         with dash_c4:
             st.metric("Target Channel", "@zelmuesports", help="All project slots upload to @zelmuesports.")
@@ -1638,9 +1638,13 @@ with tab2:
         total_uploads = len(df)
         total_mb = df["File_Size_MB"].sum() if "File_Size_MB" in df.columns else 0.0
         avg_speed = df["Speed_MBps"].mean() if "Speed_MBps" in df.columns else 0.0
-        quota_used = total_uploads * 1600
-        auth_slots_cnt = len([s for s in list_account_slots() if s["is_authenticated"]])
-        total_pool_quota = max(10000, auth_slots_cnt * 10000)
+        # Calculate daily uploads (today) matching GCP Quota metric
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        today_uploads = len(df[df["Timestamp"].astype(str).str.startswith(today_str)]) if "Timestamp" in df.columns else total_uploads
+        
+        auth_slots_cnt = max(1, len([s for s in list_account_slots() if s["is_authenticated"]]))
+        daily_upload_cap = auth_slots_cnt * 100
+        upload_pct = (today_uploads / daily_upload_cap) * 100.0 if daily_upload_cap > 0 else 0.0
 
         # Telemetry Data Grid
         m_col1, m_col2, m_col3, m_col4 = st.columns(4)
@@ -1654,10 +1658,12 @@ with tab2:
         with m_col3:
             st.metric("Avg Upload Speed", f"{avg_speed:.1f} Mbps")
         with m_col4:
-            st.metric("Est. Quota Used", f"{quota_used:,} / {total_pool_quota:,}")
+            st.metric("Daily Upload Quota", f"{today_uploads} / {daily_upload_cap} clips", delta=f"{upload_pct:.1f}% used")
 
-        if quota_used >= int(total_pool_quota * 0.8):
-            st.warning(f"⚠️ YouTube API Quota Warning: ~{quota_used:,} units consumed today (Pool capacity is {total_pool_quota:,}/day across {auth_slots_cnt} project slots).")
+        if today_uploads >= int(daily_upload_cap * 0.9):
+            st.warning(f"⚠️ High Quota Utilization: {today_uploads}/{daily_upload_cap} daily uploads used today ({upload_pct:.0f}%). Add more project slots in the pool to expand limit.")
+        else:
+            st.caption(f"✓ GCP Quota Status: **{today_uploads}/{daily_upload_cap} uploads today** ({upload_pct:.1f}% used). Limit: 100 uploads/day per project.")
 
         st.dataframe(
             df,
