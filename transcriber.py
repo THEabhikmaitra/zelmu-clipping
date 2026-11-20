@@ -390,3 +390,41 @@ def transcribe_audio_whisper(
     gc.collect()
 
     return transcript_data
+
+
+def expand_source_urls(raw_urls_text: str, max_playlist_items: int = 50) -> List[str]:
+    """
+    Expands multi-line inputs, detecting and unpacking YouTube playlist URLs
+    into individual video URLs in seconds via yt-dlp --flat-playlist.
+    """
+    raw_lines = [l.strip() for l in raw_urls_text.splitlines() if l.strip()]
+    expanded = []
+
+    for line in raw_lines:
+        if "list=" in line or "/playlist" in line:
+            # YouTube playlist detected
+            cmd = [
+                *get_ytdlp_cmd(),
+                "--flat-playlist",
+                "--no-warnings",
+                "--print", "%(id)s",
+                "--playlist-end", str(max_playlist_items),
+                line
+            ]
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                if proc.returncode == 0 and proc.stdout:
+                    for vid_id in proc.stdout.splitlines():
+                        vid_id = vid_id.strip()
+                        if vid_id and len(vid_id) == 11:
+                            v_url = f"https://www.youtube.com/watch?v={vid_id}"
+                            if v_url not in expanded:
+                                expanded.append(v_url)
+                    continue
+            except Exception:
+                pass
+
+        if line.startswith("http") and line not in expanded:
+            expanded.append(line)
+
+    return expanded

@@ -34,7 +34,14 @@ for _mod_name in ["transcriber", "editor", "analyzer", "safety", "uploader"]:
         importlib.reload(sys.modules[_mod_name])
 
 from safety import sanitize_filename, find_profanities_in_words
-from transcriber import get_ffmpeg_path, extract_audio_wav, transcribe_audio_whisper, get_video_metadata, fetch_youtube_captions
+from transcriber import (
+    get_ffmpeg_path,
+    extract_audio_wav,
+    transcribe_audio_whisper,
+    get_video_metadata,
+    fetch_youtube_captions,
+    expand_source_urls
+)
 from analyzer import extract_candidates_full, calculate_audio_spikes, OLLAMA_API_URL, MODEL_NAME
 from editor import (
     generate_karaoke_ass,
@@ -54,6 +61,7 @@ from uploader import (
     exchange_code_for_token,
     run_local_server_auth,
     revoke_token,
+    get_available_token_files,
     CLIENT_SECRETS_FILE,
     TOKEN_FILE,
     LOG_FILE,
@@ -686,9 +694,16 @@ with tab1:
 
         enable_yolox = False
         enable_hook_badge = True
+        enable_anti_cid = True
+        enable_sfx = True
+        enable_phonk = False
+
         if "Mode A" in mode:
             enable_yolox = st.checkbox("Dynamic Player Tracking (YOLOX-S)", value=True, help="Follows player dynamically across 16:9 frame")
             enable_hook_badge = st.checkbox("🔥 Frame-1 Viral Hook Badge", value=True, help="Burns dynamic curiosity banner into Frame 1 (first 1.2s) to maximize YouTube Shorts swipe-through rate")
+            enable_anti_cid = st.checkbox("🛡️ Anti-Content-ID Protection", value=True, help="0.3% dynamic scale/acoustic jitter to prevent duplicate match and protect monetization")
+            enable_sfx = st.checkbox("💥 SFX Punch-In Transitions", value=True, help="Injects audio impact/whoosh transitions on hook and key beats")
+            enable_phonk = st.checkbox("🎵 Background Beat (Sidechain Ducking)", value=False, help="Layers trending gaming rhythm beat with automatic voice ducking")
             split_cam = st.checkbox("Facecam split (9:16)", value=False)
             if split_cam:
                 cam_position = st.selectbox(
@@ -758,9 +773,9 @@ with tab1:
     should_run = start_btn or st.session_state.pop("trigger_produce", False)
 
     if should_run:
-        urls = [u.strip() for u in url_input.splitlines() if u.strip()]
+        urls = expand_source_urls(url_input)
         if not urls:
-            st.warning("Please provide at least one valid video URL.")
+            st.warning("Please provide at least one valid video URL or playlist link.")
         else:
             labor_box = st.empty()
             status_box = st.empty()
@@ -989,7 +1004,10 @@ with tab1:
                                 facecam_position=cam_position.lower() if split_cam else "top-left",
                                 enable_tracking=enable_yolox,
                                 logo_path=active_logo_path,
-                                hook_title=cand.get("title", "GTA 6 MOMENT") if enable_hook_badge else None
+                                hook_title=cand.get("title", "GTA 6 MOMENT") if enable_hook_badge else None,
+                                enable_anti_content_id=enable_anti_cid,
+                                enable_music_ducking=enable_phonk,
+                                enable_sfx=enable_sfx
                             )
                             push_log(f"✓ Rendered: {final_dest.name}")
                             return final_dest
@@ -1225,6 +1243,10 @@ with tab2:
                 st.rerun()
         else:
             st.warning("YouTube Not Linked")
+
+    avail_tokens = get_available_token_files()
+    if len(avail_tokens) > 1:
+        st.info(f"🔄 **Multi-Account Quota Rotator Active:** {len(avail_tokens)} Google account tokens found in pool (`tokens/`). Auto-rotates across accounts when daily quota limits are hit.")
 
     # Client Secrets Uploader / Config
     with st.expander("🔑 OAuth Client Configuration / Replace Secrets", expanded=not CLIENT_SECRETS_FILE.exists()):

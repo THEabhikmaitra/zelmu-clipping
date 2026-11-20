@@ -12,6 +12,8 @@ bin/
 # Credentials & OAuth Tokens (CRITICAL FOR PUBLIC REPOS)
 client_secrets.json
 token.json
+token_*.json
+tokens/
 *.pem
 *.key
 .env

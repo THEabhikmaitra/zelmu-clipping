@@ -19,18 +19,31 @@ SCOPES = [
 ]
 CLIENT_SECRETS_FILE = Path("client_secrets.json")
 TOKEN_FILE = Path("token.json")
+TOKENS_DIR = Path("tokens")
 LOG_FILE = Path("upload_log.csv")
 READY_DIR = Path("ready_to_upload")
 ARCHIVE_DIR = Path("uploaded_archive")
 DEFAULT_REDIRECT_URI = "http://localhost:8080/"
 
 
-def get_credentials() -> Optional[Credentials]:
-    """Returns valid Credentials if available and refreshed, else None."""
-    creds = None
+def get_available_token_files() -> List[Path]:
+    """Finds all available token.json files in root and tokens/ directory for multi-account quota rotation."""
+    TOKENS_DIR.mkdir(parents=True, exist_ok=True)
+    tokens = []
     if TOKEN_FILE.exists():
+        tokens.append(TOKEN_FILE)
+    tokens.extend(sorted(list(TOKENS_DIR.glob("*.json"))))
+    tokens.extend(sorted([f for f in Path(".").glob("token_*.json") if f not in tokens]))
+    return tokens
+
+
+def get_credentials(token_path: Optional[Path] = None) -> Optional[Credentials]:
+    """Returns valid Credentials for specified token file (or default token.json), else None."""
+    target_token = Path(token_path) if token_path else TOKEN_FILE
+    creds = None
+    if target_token.exists():
         try:
-            creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
+            creds = Credentials.from_authorized_user_file(str(target_token), SCOPES)
         except Exception:
             creds = None
 
@@ -40,7 +53,7 @@ def get_credentials() -> Optional[Credentials]:
         if creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
-                with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+                with open(target_token, "w", encoding="utf-8") as f:
                     f.write(creds.to_json())
                 return creds
             except Exception:
@@ -48,16 +61,23 @@ def get_credentials() -> Optional[Credentials]:
     return None
 
 
-def is_authenticated() -> bool:
+def is_authenticated(token_path: Optional[Path] = None) -> bool:
     """Checks whether valid YouTube OAuth credentials exist."""
-    return get_credentials() is not None
+    return get_credentials(token_path) is not None
 
 
-def get_authenticated_service():
+def get_authenticated_service(token_path: Optional[Path] = None):
     """
     Returns YouTube API client. Raises RuntimeError if not authenticated.
     """
-    creds = get_credentials()
+    creds = get_credentials(token_path)
+    if not creds:
+        if not CLIENT_SECRETS_FILE.exists():
+            raise FileNotFoundError(
+                f"'{CLIENT_SECRETS_FILE}' not found. Place client_secrets.json in root."
+            )
+        raise RuntimeError("YouTube not authenticated. Complete Google OAuth sign-in first.")
+    return build("youtube", "v3", credentials=creds)
     if not creds:
         if not CLIENT_SECRETS_FILE.exists():
             raise FileNotFoundError(
@@ -568,8 +588,15 @@ def upload_batch_private(
             except Exception:
                 pass
 
+    token_pool = get_available_token_files()
+    active_token_idx = 0
+
+    def get_current_thread_client():
+        tok = token_pool[active_token_idx] if token_pool else None
+        return get_authenticated_service(tok)
+
     def worker_upload(idx: int, video_path: Path, pub_time: Optional[str]):
-        nonlocal completed_bytes, completed_count, quota_hit
+        nonlocal completed_bytes, completed_count, quota_hit, active_token_idx
         if quota_hit:
             return None
 
@@ -581,10 +608,11 @@ def upload_batch_private(
             progress_callback(idx + 1, total_count, file_name)
 
         if log_callback:
-            log_callback(f"[Stream #{idx+1}] Uploading: {file_name} ({file_size / (1024*1024):.1f} MB)...")
+            curr_tok_name = token_pool[active_token_idx].name if token_pool else "default"
+            log_callback(f"[Stream #{idx+1} | Acc: {curr_tok_name}] Uploading: {file_name} ({file_size / (1024*1024):.1f} MB)...")
 
         # Thread-local YouTube API client
-        yt_thread = get_authenticated_service()
+        yt_thread = get_current_thread_client()
 
         def on_chunk(stats):
             with lock:
@@ -618,8 +646,24 @@ def upload_batch_private(
                     del active_transfers[file_name]
             err_msg = str(e)
             if "quotaExceeded" in err_msg or "uploadLimitExceeded" in err_msg:
+                # Multi-Account Quota Rotation: check if backup account token exists
+                with lock:
+                    if active_token_idx + 1 < len(token_pool):
+                        active_token_idx += 1
+                        next_tok = token_pool[active_token_idx]
+                        if log_callback:
+                            log_callback(f"🔄 QUOTA LIMIT HIT on account #{active_token_idx}. Auto-rotating to backup token: {next_tok.name}...")
+                        # Retry uploading with the rotated token
+                        yt_rotated = get_authenticated_service(next_tok)
+                        return upload_single_video(
+                            yt_rotated,
+                            video_path,
+                            title=title_raw,
+                            publish_at=pub_time,
+                            chunk_callback=on_chunk
+                        )
                 quota_hit = True
-                msg = f"Daily YouTube upload quota reached at clip #{idx+1}. Remaining clips safely kept in ready_to_upload/."
+                msg = f"Daily YouTube upload quota reached on all available accounts at clip #{idx+1}. Remaining clips safely saved in ready_to_upload/."
                 if log_callback:
                     log_callback(f"⚠️ {msg}")
                 return {"error": msg, "video_id": None}
