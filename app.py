@@ -58,12 +58,19 @@ from uploader import (
     get_channel_info,
     get_channel_analytics,
     get_auth_url,
+    get_auth_url_for_slot,
     exchange_code_for_token,
     run_local_server_auth,
     revoke_token,
     get_available_token_files,
+    list_account_slots,
+    add_account_slot,
+    authenticate_account_slot,
+    test_account_slot,
+    delete_account_slot,
     CLIENT_SECRETS_FILE,
     TOKEN_FILE,
+    TOKENS_DIR,
     LOG_FILE,
     READY_DIR,
     ARCHIVE_DIR
@@ -1221,18 +1228,23 @@ with tab2:
     ready_videos = sorted(list(READY_DIR.glob("*.mp4")))
     yt_connected = is_authenticated()
     curr_client_id = get_client_id_info()
+    configured_slots = list_account_slots()
+    auth_slots = [s for s in configured_slots if s["is_authenticated"]]
+    pool_quota = max(10000, len(auth_slots) * 10000)
 
     # Top Status Row
     col1, col2 = st.columns([1, 1])
     with col1:
         st.metric("Ready in Queue", f"{len(ready_videos)} clips")
-        if len(ready_videos) > 25:
-            st.caption("Batch capped at 25 (quota limit)")
+        if len(auth_slots) > 1:
+            st.caption(f"⚡ Multi-Project Quota: {pool_quota:,} units across {len(auth_slots)} projects")
+        elif len(ready_videos) > 6:
+            st.caption("Standard GCP quota: 10,000 units (~6 uploads/day)")
 
     with col2:
-        if not CLIENT_SECRETS_FILE.exists():
+        if not CLIENT_SECRETS_FILE.exists() and not configured_slots:
             st.error("Missing client_secrets.json in root folder.")
-        elif yt_connected:
+        elif yt_connected or auth_slots:
             an = get_channel_analytics()
             title = an.get("title", "Connected Account")
             subs = an.get("subscribers", 0)
@@ -1244,12 +1256,203 @@ with tab2:
         else:
             st.warning("YouTube Not Linked")
 
-    avail_tokens = get_available_token_files()
-    if len(avail_tokens) > 1:
-        st.info(f"🔄 **Multi-Account Quota Rotator Active:** {len(avail_tokens)} Google account tokens found in pool (`tokens/`). Auto-rotates across accounts when daily quota limits are hit.")
+    if len(auth_slots) > 1:
+        st.info(f"🔄 **Multi-Project Quota Pool Active:** {len(auth_slots)} authorized GCP project slots connected ({pool_quota:,} total daily units). Auto-rotates to next project slot when daily 10k quota limits are reached, maintaining continuous uploads to **@zelmuesports**.")
 
-    # Client Secrets Uploader / Config
-    with st.expander("🔑 OAuth Client Configuration / Replace Secrets", expanded=not CLIENT_SECRETS_FILE.exists()):
+    # Item 3: Multi-Project Account Pool (Scale Beyond 10k Daily Quota)
+    with st.expander("🔑 Multi-Project Account Pool (Scale Beyond 10k Daily Quota)", expanded=len(configured_slots) > 1):
+        st.markdown("""
+        <div style="background: rgba(37, 99, 235, 0.08); border: 1px solid rgba(37, 99, 235, 0.25); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px;">
+            <div style="font-weight: 700; color: #60a5fa; margin-bottom: 4px;">Scale Beyond 10k Daily YouTube Upload Quota</div>
+            <div style="font-size: 0.84rem; color: #94a3b8; line-height: 1.45;">
+                Every standard Google Cloud project receives <b>10,000 quota units/day</b> (~6 Shorts at 1,600 units/insert).
+                By creating additional GCP projects authorized against <b>@zelmuesports</b> and uploading their <code>client_secrets_*.json</code> files here,
+                the uploader seamlessly rotates across slots on <code>quotaExceeded</code> limits (10k + 10k + 10k = 30k&ndash;60k+ units/day) without interrupting your queue.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        pool_c1, pool_c2, pool_c3 = st.columns(3)
+        with pool_c1:
+            st.metric("Configured Slots", f"{len(configured_slots)} Projects")
+        with pool_c2:
+            st.metric("Active Daily Quota", f"{pool_quota:,} units", help="10,000 units per authorized project")
+        with pool_c3:
+            st.metric("Target Channel", "@zelmuesports")
+
+        st.markdown("---")
+        st.markdown("##### ➕ Add Project Slot (client_secrets_*.json)")
+        new_slot_file = st.file_uploader(
+            "Upload additional client_secrets_*.json from Google Cloud Console (Project 2, Project 3...)",
+            type=["json"],
+            key="up_slot_secrets_pool_json",
+            help="Download OAuth 2.0 Client Credentials JSON from an additional GCP project and drop it here."
+        )
+        if new_slot_file is not None:
+            try:
+                raw_bytes = new_slot_file.read()
+                added_slot = add_account_slot(raw_bytes)
+                st.success(f"✓ Added project slot: **{added_slot['name']}** (Project: `{added_slot['project_id']}`). Authorize it below.")
+                time.sleep(0.5)
+                st.rerun()
+            except Exception as ex:
+                st.error(f"Error adding project slot: {ex}")
+
+        st.markdown("##### 📋 Configured Project Slots & Rotation Status")
+        if not configured_slots:
+            st.caption("No account slots configured yet.")
+        else:
+            for s_idx, slot in enumerate(configured_slots):
+                with st.container():
+                    sc1, sc2, sc3 = st.columns([2.5, 2.2, 2.3])
+                    with sc1:
+                        st.markdown(f"**{slot['name']}**")
+                        st.caption(f"Project ID: `{slot['project_id']}` | Client: `...{slot['client_id'][-14:] if len(slot['client_id']) > 14 else slot['client_id']}`")
+                    with sc2:
+                        if slot["is_authenticated"]:
+                            st.markdown(
+                                f"<div style='font-size:0.85rem; color:#22c55e; font-weight:600;'>● Connected & Verified</div>"
+                                f"<div style='font-size:0.8rem; color:#94a3b8;'>Channel: <b>{slot['channel_handle']}</b></div>",
+                                unsafe_allow_html=True
+                            )
+                        elif slot.get("quota_exceeded"):
+                            st.markdown("<div style='font-size:0.85rem; color:#f59e0b; font-weight:600;'>⚠️ 10k Quota Hit Today</div>", unsafe_allow_html=True)
+                        else:
+                            st.markdown("<div style='font-size:0.85rem; color:#ef4444; font-weight:600;'>○ Needs Sign-In</div>", unsafe_allow_html=True)
+                    with sc3:
+                        if not slot["is_authenticated"]:
+                            with st.popover(f"Sign In ({slot['slot_id']})", use_container_width=True):
+                                st.caption(f"Authorize Google account for {slot['name']}:")
+                                if st.button("Launch Browser Sign-In", key=f"btn_auth_pop_{slot['slot_id']}", use_container_width=True):
+                                    with st.spinner("Waiting for Google OAuth in browser..."):
+                                        try:
+                                            authenticate_account_slot(slot["slot_id"])
+                                            st.success("Successfully authenticated!")
+                                            st.rerun()
+                                        except Exception as err:
+                                            st.error(f"Sign-in failed: {err}")
+                                try:
+                                    slot_url = get_auth_url_for_slot(slot["slot_id"])
+                                    st.markdown(f'<a href="{slot_url}" target="_blank" style="display:inline-block; font-size:0.8rem; margin:6px 0;">🔗 Open Google Sign-In Tab</a>', unsafe_allow_html=True)
+                                    code_val = st.text_input("Paste redirect code / URL:", key=f"slot_code_in_{slot['slot_id']}")
+                                    if st.button("Exchange Code", key=f"btn_code_ex_{slot['slot_id']}"):
+                                        if code_val:
+                                            authenticate_account_slot(slot["slot_id"], code=code_val)
+                                            st.success("Connected!")
+                                            st.rerun()
+                                except Exception:
+                                    pass
+                        else:
+                            tc1, tc2 = st.columns([1, 1])
+                            with tc1:
+                                if st.button("🧪 Test Slot", key=f"btn_test_slot_{slot['slot_id']}", use_container_width=True):
+                                    test_res = test_account_slot(slot["slot_id"])
+                                    if test_res.get("valid"):
+                                        st.toast(f"Slot '{slot['name']}' ready: {test_res['channel_title']} ({test_res['channel_handle']})", icon="✅")
+                                    else:
+                                        st.error(f"Slot verification failed: {test_res.get('error')}")
+                            with tc2:
+                                if slot["slot_id"] != "default":
+                                    if st.button("🗑️ Remove", key=f"btn_del_slot_{slot['slot_id']}", use_container_width=True):
+                                        delete_account_slot(slot["slot_id"])
+                                        st.rerun()
+                                else:
+                                    if st.button("Disconnect", key=f"btn_disc_slot_{slot['slot_id']}", use_container_width=True):
+                                        revoke_token()
+                                        st.rerun()
+                    st.divider()
+
+    # Item 4: Google Cloud Quota Increase Application Assistant
+    with st.expander("📈 Permanent Quota Increase (Request 250k - 1M Daily Units)", expanded=False):
+        st.markdown("""
+        <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; padding: 14px; margin-bottom: 16px;">
+            <div style="font-weight: 700; color: #34d399; margin-bottom: 4px;">Official YouTube Data API v3 Quota Increase Application Assistant</div>
+            <div style="font-size: 0.85rem; color: #94a3b8; line-height: 1.45;">
+                Google grants permanent daily quota extensions (from 10k up to <b>250,000 &ndash; 1,000,000+ units/day</b>, supporting 150 &ndash; 600+ uploads/day) to legitimate channels that meet Developer Policies and Fair Use standards.
+                Copy the pre-filled, compliant answers below directly into the Google Cloud Quota Increase Form.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col_qlink1, col_qlink2 = st.columns([1, 1])
+        with col_qlink1:
+            st.markdown(
+                '<a href="https://console.cloud.google.com/apis/api/youtube.googleapis.com/quotas" target="_blank" '
+                'style="display:block; text-align:center; background:#2563eb; color:white; padding:10px 14px; border-radius:6px; text-decoration:none; font-weight:600; margin-bottom:12px;">'
+                '🔗 1. Open Google Cloud Quota Form ↗</a>',
+                unsafe_allow_html=True
+            )
+        with col_qlink2:
+            st.markdown(
+                '<a href="https://support.google.com/youtube/contact/yt_api_form" target="_blank" '
+                'style="display:block; text-align:center; background:#1e293b; border:1px solid #334155; color:#f1f5f9; padding:10px 14px; border-radius:6px; text-decoration:none; font-weight:600; margin-bottom:12px;">'
+                '📋 2. YouTube API Services Extension Form ↗</a>',
+                unsafe_allow_html=True
+            )
+
+        # 1. Project Number / ID guidance
+        st.markdown("#### 1. Google Cloud Project Number & Project ID")
+        current_gcp_pid = ""
+        if CLIENT_SECRETS_FILE.exists():
+            try:
+                with open(CLIENT_SECRETS_FILE, "r", encoding="utf-8") as f:
+                    sec_d = json.load(f)
+                current_gcp_pid = (sec_d.get("installed") or sec_d.get("web") or {}).get("project_id", "")
+            except Exception:
+                pass
+
+        if current_gcp_pid:
+            st.info(f"Detected Active GCP Project ID: `{current_gcp_pid}`")
+        st.caption("How to locate: In [Google Cloud Console](https://console.cloud.google.com/), open the top-left project dropdown or navigate to **IAM & Admin > Settings**. Copy both the Project ID and numeric Project Number.")
+
+        # 2. API services requested: YouTube Data API v3 (videos.insert)
+        st.markdown("#### 2. API Services & Methods Requested")
+        api_services_info = """API Service: YouTube Data API v3
+API Methods Requested:
+  - videos.insert (resumable upload protocol, 1,600 units per video)
+  - channels.list (channel snippet & handle verification, 1 unit)
+Current Limit: 10,000 units/day (~6 video uploads)
+Requested Limit: 250,000 units/day (supports up to 150 daily scheduled Shorts across peak timezone cadences)"""
+        st.code(api_services_info, language="yaml")
+
+        # 3. Use-case explanation
+        st.markdown("#### 3. Use-Case Explanation")
+        use_case_explanation = """Automated video clipping and scheduled publishing for verified esports channel @zelmuesports.
+
+Our application ingests authorized long-form gameplay broadcasts and esports tournament footage, identifies high-engagement highlight moments using acoustic spike detection and transcript analysis, and edits them into vertical Shorts with dynamic subtitles.
+
+Processed clips are uploaded directly to our official YouTube channel (@zelmuesports) as Private or Scheduled releases, allowing human editorial review before publication."""
+        st.text_area("Pre-filled Use-Case (Copy & paste into application form):", value=use_case_explanation, height=130, key="txt_use_case_app_desc")
+
+        # 4. Compliance justifications (Fair Use, human review, private/scheduled defaults, zero spam)
+        st.markdown("#### 4. Compliance Justifications & Fair Use Protections")
+        compliance_justifications = """• Transformative Fair Use: Every clip is substantively transformed with pacing edits, audio-reactive subtitles, and commentary under Fair Use principles for esports entertainment.
+
+• Human Review & Operator Oversight: No video is published publicly automatically. All uploads default to privacyStatus='private' or future scheduled release ('publishAt'), enabling editorial validation prior to release.
+
+• Developer Policy Compliance:
+  - Resumable chunked upload protocol prevents network congestion and repeated attempts.
+  - Zero spam: clips undergo duplicate detection and strict cadence throttling.
+  - defaultLanguage and defaultAudioLanguage set to 'en-US', categoryId '20' (Gaming).
+
+• Data Privacy & Storage: All OAuth tokens and client secrets are stored strictly locally on the channel manager's private workstation. No user or channel data is transmitted to third-party servers."""
+        st.text_area("Pre-filled Compliance Statement (Copy & paste into application form):", value=compliance_justifications, height=170, key="txt_compliance_app_stm")
+
+        # 5. Direct links and approval tips
+        st.markdown("#### 5. Approval Checklist & Direct Form Links")
+        st.markdown("""
+        - Direct Form 1: [Google Cloud Console YouTube Quotas](https://console.cloud.google.com/apis/api/youtube.googleapis.com/quotas)
+        - Direct Form 2: [YouTube API Services - Quota Extension Request](https://support.google.com/youtube/contact/yt_api_form)
+        
+        **Approval Checklist:**
+        - [x] **OAuth Consent Screen**: Ensure your GCP OAuth consent screen is configured (App name: `Zelmu Clipping`, User support email, Developer email).
+        - [x] **Scopes Added**: Ensure `https://www.googleapis.com/auth/youtube.upload` is listed under scopes.
+        - [x] **Demo Video (If Requested)**: If Google asks for a 1-minute video demonstrating how the API is used, record a quick screen capture of the Zelmu Clipping UI uploading a test clip as Private.
+        - [x] **Turnaround Time**: Google's API Trust & Safety team typically reviews requests within **2&ndash;3 business days**.
+        """)
+
+    # Primary Client Secrets Uploader / Config
+    with st.expander("🔑 Primary OAuth Client Configuration / Replace Secrets", expanded=not CLIENT_SECRETS_FILE.exists()):
         if curr_client_id:
             st.caption(f"Configured Client ID: `{curr_client_id}`")
         new_secrets_file = st.file_uploader("Upload new client_secrets.json from Google Cloud Console", type=["json"], key="up_secrets_json")
@@ -1456,6 +1659,8 @@ with tab2:
         total_mb = df["File_Size_MB"].sum() if "File_Size_MB" in df.columns else 0.0
         avg_speed = df["Speed_MBps"].mean() if "Speed_MBps" in df.columns else 0.0
         quota_used = total_uploads * 1600
+        auth_slots_cnt = len([s for s in list_account_slots() if s["is_authenticated"]])
+        total_pool_quota = max(10000, auth_slots_cnt * 10000)
 
         # Telemetry Data Grid
         m_col1, m_col2, m_col3, m_col4 = st.columns(4)
@@ -1469,10 +1674,10 @@ with tab2:
         with m_col3:
             st.metric("Avg Upload Speed", f"{avg_speed:.1f} Mbps")
         with m_col4:
-            st.metric("Est. Quota Used", f"{quota_used:,} / 10,000")
+            st.metric("Est. Quota Used", f"{quota_used:,} / {total_pool_quota:,}")
 
-        if quota_used >= 8000:
-            st.warning(f"⚠️ YouTube API Quota Warning: ~{quota_used:,} units consumed today (Standard default quota limit is 10,000/day).")
+        if quota_used >= int(total_pool_quota * 0.8):
+            st.warning(f"⚠️ YouTube API Quota Warning: ~{quota_used:,} units consumed today (Pool capacity is {total_pool_quota:,}/day across {auth_slots_cnt} project slots).")
 
         st.dataframe(
             df,

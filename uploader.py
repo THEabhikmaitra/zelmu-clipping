@@ -3,8 +3,9 @@ import csv
 import json
 import shutil
 import urllib.parse
+import re
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -25,16 +26,353 @@ READY_DIR = Path("ready_to_upload")
 ARCHIVE_DIR = Path("uploaded_archive")
 DEFAULT_REDIRECT_URI = "http://localhost:8080/"
 
+# In-memory tracking for channel info cache & quota-exhausted slots
+_CHANNEL_INFO_CACHE: Dict[str, Any] = {}
+_EXHAUSTED_SLOT_IDS = set()
+
+
+def mark_slot_quota_exhausted(slot_id: str):
+    """Marks an account slot as having hit its daily 10k quota."""
+    _EXHAUSTED_SLOT_IDS.add(slot_id)
+
+
+def reset_exhausted_slots():
+    """Resets daily exhausted quota tracking."""
+    _EXHAUSTED_SLOT_IDS.clear()
+
+
+def list_account_slots() -> List[Dict[str, Any]]:
+    """
+    Discovers and returns all configured Google Cloud project account slots.
+    Pairs each client_secrets_*.json with its corresponding token_*.json in tokens/ and root.
+    """
+    TOKENS_DIR.mkdir(parents=True, exist_ok=True)
+    slots = []
+    seen_slot_ids = set()
+
+    # 1. Primary/Default Slot
+    default_sec = CLIENT_SECRETS_FILE if CLIENT_SECRETS_FILE.exists() else (
+        TOKENS_DIR / "client_secrets_default.json" if (TOKENS_DIR / "client_secrets_default.json").exists() else None
+    )
+    default_tok = TOKEN_FILE if TOKEN_FILE.exists() else (
+        TOKENS_DIR / "token_default.json" if (TOKENS_DIR / "token_default.json").exists() else TOKEN_FILE
+    )
+
+    if default_sec or default_tok.exists() or CLIENT_SECRETS_FILE.exists():
+        seen_slot_ids.add("default")
+        cid, pid = "", ""
+        if default_sec and default_sec.exists():
+            try:
+                with open(default_sec, "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                cfg = d.get("installed") or d.get("web") or {}
+                cid = cfg.get("client_id", "")
+                pid = cfg.get("project_id", "")
+            except Exception:
+                pass
+
+        is_auth = default_tok.exists() and is_authenticated(default_tok)
+        ch_title, ch_handle = "YouTube Channel", "@zelmuesports"
+        if is_auth:
+            info = get_channel_info(token_path=default_tok) or {}
+            ch_title = info.get("title", "YouTube Channel")
+            ch_handle = info.get("customUrl", "") or "@zelmuesports"
+
+        quota_hit = "default" in _EXHAUSTED_SLOT_IDS
+        if quota_hit:
+            status = "Quota Limit Reached (10k)"
+        elif is_auth:
+            status = "Connected & Active"
+        elif default_sec and default_sec.exists():
+            status = "Needs Authentication"
+        else:
+            status = "Missing client_secrets.json"
+
+        slots.append({
+            "slot_id": "default",
+            "name": "Slot 1 (Primary)",
+            "secrets_path": default_sec or CLIENT_SECRETS_FILE,
+            "token_path": default_tok,
+            "project_id": pid or "Primary GCP Project",
+            "client_id": cid,
+            "is_authenticated": is_auth,
+            "channel_title": ch_title,
+            "channel_handle": ch_handle,
+            "status": status,
+            "quota_exceeded": quota_hit
+        })
+
+    # 2. Search for additional client_secrets_*.json in tokens/ and root
+    candidate_secs = list(TOKENS_DIR.glob("client_secrets_*.json")) + list(Path(".").glob("client_secrets_*.json"))
+    for sec_p in candidate_secs:
+        stem = sec_p.stem
+        if not stem.startswith("client_secrets_"):
+            continue
+        slot_id = stem[len("client_secrets_"):].strip().lower()
+        if not slot_id or slot_id in seen_slot_ids or slot_id == "default":
+            continue
+        seen_slot_ids.add(slot_id)
+
+        tok_p = TOKENS_DIR / f"token_{slot_id}.json"
+        if not tok_p.exists():
+            alt_tok = Path(f"token_{slot_id}.json")
+            if alt_tok.exists():
+                tok_p = alt_tok
+
+        cid, pid = "", ""
+        try:
+            with open(sec_p, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            cfg = d.get("installed") or d.get("web") or {}
+            cid = cfg.get("client_id", "")
+            pid = cfg.get("project_id", "")
+        except Exception:
+            pass
+
+        is_auth = tok_p.exists() and is_authenticated(tok_p)
+        ch_title, ch_handle = "YouTube Channel", "@zelmuesports"
+        if is_auth:
+            info = get_channel_info(token_path=tok_p) or {}
+            ch_title = info.get("title", "YouTube Channel")
+            ch_handle = info.get("customUrl", "") or "@zelmuesports"
+
+        quota_hit = slot_id in _EXHAUSTED_SLOT_IDS
+        if quota_hit:
+            status = "Quota Limit Reached (10k)"
+        elif is_auth:
+            status = "Connected & Active"
+        else:
+            status = "Needs Authentication"
+
+        slot_num = len(slots) + 1
+        slots.append({
+            "slot_id": slot_id,
+            "name": f"Slot {slot_num} ({pid or slot_id})",
+            "secrets_path": sec_p,
+            "token_path": tok_p,
+            "project_id": pid or slot_id,
+            "client_id": cid,
+            "is_authenticated": is_auth,
+            "channel_title": ch_title,
+            "channel_handle": ch_handle,
+            "status": status,
+            "quota_exceeded": quota_hit
+        })
+
+    # 3. Check for any standalone token_*.json in tokens/
+    candidate_toks = list(TOKENS_DIR.glob("token_*.json")) + list(Path(".").glob("token_*.json"))
+    for tok_p in candidate_toks:
+        stem = tok_p.stem
+        if not stem.startswith("token_"):
+            continue
+        slot_id = stem[len("token_"):].strip().lower()
+        if not slot_id or slot_id in seen_slot_ids or slot_id == "default":
+            continue
+        seen_slot_ids.add(slot_id)
+
+        sec_p = TOKENS_DIR / f"client_secrets_{slot_id}.json"
+        if not sec_p.exists():
+            sec_p = CLIENT_SECRETS_FILE if CLIENT_SECRETS_FILE.exists() else None
+
+        is_auth = is_authenticated(tok_p)
+        ch_title, ch_handle = "YouTube Channel", "@zelmuesports"
+        if is_auth:
+            info = get_channel_info(token_path=tok_p) or {}
+            ch_title = info.get("title", "YouTube Channel")
+            ch_handle = info.get("customUrl", "") or "@zelmuesports"
+
+        slot_num = len(slots) + 1
+        slots.append({
+            "slot_id": slot_id,
+            "name": f"Slot {slot_num} ({slot_id})",
+            "secrets_path": sec_p,
+            "token_path": tok_p,
+            "project_id": slot_id,
+            "client_id": "",
+            "is_authenticated": is_auth,
+            "channel_title": ch_title,
+            "channel_handle": ch_handle,
+            "status": "Connected & Active" if is_auth else "Token Expired",
+            "quota_exceeded": slot_id in _EXHAUSTED_SLOT_IDS
+        })
+
+    return slots
+
+
+def add_account_slot(
+    secrets_source: Any,
+    slot_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Adds a new client_secrets JSON into tokens/ and pairs it with token_{slot_id}.json.
+    Accepts file path, raw bytes, string, or parsed dict.
+    """
+    TOKENS_DIR.mkdir(parents=True, exist_ok=True)
+    if isinstance(secrets_source, dict):
+        data = secrets_source
+    elif isinstance(secrets_source, bytes):
+        data = json.loads(secrets_source.decode("utf-8"))
+    elif isinstance(secrets_source, (str, Path)):
+        p = Path(secrets_source)
+        if p.exists():
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = json.loads(str(secrets_source))
+    else:
+        raise ValueError("Unsupported secrets_source format")
+
+    cfg = data.get("installed") or data.get("web")
+    if not cfg:
+        raise ValueError("Invalid client_secrets.json: missing 'installed' or 'web' application credentials.")
+    if "client_id" not in cfg:
+        raise ValueError("Invalid client_secrets.json: missing 'client_id'.")
+
+    proj_id = cfg.get("project_id", "")
+    existing_slots = {s["slot_id"] for s in list_account_slots()}
+
+    if not slot_id:
+        if proj_id:
+            candidate_id = re.sub(r'[^a-zA-Z0-9_-]', '', proj_id).lower()
+        else:
+            candidate_id = ""
+        
+        if candidate_id and candidate_id not in existing_slots and candidate_id != "default":
+            slot_id = candidate_id
+        else:
+            idx = max(2, len(existing_slots) + 1)
+            while f"slot_{idx}" in existing_slots:
+                idx += 1
+            slot_id = f"slot_{idx}"
+    else:
+        slot_id = re.sub(r'[^a-zA-Z0-9_-]', '', slot_id).lower()
+
+    target_sec = TOKENS_DIR / f"client_secrets_{slot_id}.json"
+    target_tok = TOKENS_DIR / f"token_{slot_id}.json"
+
+    with open(target_sec, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+    return {
+        "slot_id": slot_id,
+        "name": f"Slot ({slot_id})",
+        "secrets_path": target_sec,
+        "token_path": target_tok,
+        "project_id": proj_id or slot_id,
+        "client_id": cfg.get("client_id", ""),
+        "is_authenticated": False,
+        "channel_title": "YouTube Channel",
+        "channel_handle": "@zelmuesports",
+        "status": "Ready for Authentication",
+        "quota_exceeded": False
+    }
+
+
+def delete_account_slot(slot_id: str) -> bool:
+    """Removes a secondary account slot from tokens/."""
+    if slot_id == "default":
+        if TOKEN_FILE.exists():
+            TOKEN_FILE.unlink()
+            return True
+        return False
+
+    deleted = False
+    sec = TOKENS_DIR / f"client_secrets_{slot_id}.json"
+    tok = TOKENS_DIR / f"token_{slot_id}.json"
+    if sec.exists():
+        sec.unlink()
+        deleted = True
+    if tok.exists():
+        tok.unlink()
+        deleted = True
+    return deleted
+
+
+def authenticate_account_slot(
+    slot_id: str,
+    port: int = 8080,
+    timeout_seconds: int = 60,
+    code: Optional[str] = None,
+    redirect_uri: str = DEFAULT_REDIRECT_URI
+) -> Credentials:
+    """
+    Authenticates a specific account slot using interactive browser or manual code exchange.
+    Saves credentials to the slot's corresponding token file.
+    """
+    slots = {s["slot_id"]: s for s in list_account_slots()}
+    if slot_id not in slots:
+        raise ValueError(f"Account slot '{slot_id}' not found.")
+    slot = slots[slot_id]
+    sec_path = slot["secrets_path"]
+    tok_path = slot["token_path"]
+
+    if not sec_path or not Path(sec_path).exists():
+        raise FileNotFoundError(f"Client secrets file not found for slot '{slot_id}': {sec_path}")
+
+    if code:
+        creds = exchange_code_for_token(code, redirect_uri=redirect_uri, secrets_file=sec_path, token_file=tok_path)
+    else:
+        creds = run_local_server_auth(port=port, timeout_seconds=timeout_seconds, secrets_file=sec_path, token_file=tok_path)
+
+    # Invalidate cache for this token
+    cache_key = str(Path(tok_path).resolve()) if Path(tok_path).exists() else str(tok_path)
+    if cache_key in _CHANNEL_INFO_CACHE:
+        del _CHANNEL_INFO_CACHE[cache_key]
+
+    return creds
+
+
+def test_account_slot(slot_id: str) -> Dict[str, Any]:
+    """
+    Tests YouTube Data API v3 connectivity and channel verification for an account slot.
+    Returns status dictionary.
+    """
+    slots = {s["slot_id"]: s for s in list_account_slots()}
+    if slot_id not in slots:
+        return {"valid": False, "error": f"Slot '{slot_id}' not found"}
+    slot = slots[slot_id]
+    tok_path = slot["token_path"]
+    if not tok_path or not Path(tok_path).exists():
+        return {"valid": False, "error": "Token not found. Sign-in required."}
+
+    creds = get_credentials(tok_path)
+    if not creds:
+        return {"valid": False, "error": "Token expired or invalid. Re-authentication required."}
+
+    try:
+        info = get_channel_info(creds=creds, token_path=tok_path, force_refresh=True) or {}
+        handle = info.get("customUrl", "") or "@zelmuesports"
+        title = info.get("title", "YouTube Channel")
+        return {
+            "valid": True,
+            "channel_title": title,
+            "channel_handle": handle,
+            "message": f"Verified: Linked to {title} ({handle})"
+        }
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
+
+
+def get_auth_url_for_slot(slot_id: str, redirect_uri: str = DEFAULT_REDIRECT_URI) -> str:
+    """Generates direct Google OAuth consent URL for a specific slot."""
+    slots = {s["slot_id"]: s for s in list_account_slots()}
+    if slot_id not in slots:
+        raise ValueError(f"Account slot '{slot_id}' not found.")
+    sec_path = slots[slot_id]["secrets_path"]
+    if not sec_path or not Path(sec_path).exists():
+        raise FileNotFoundError(f"Client secrets not found for slot '{slot_id}'")
+    return get_auth_url(redirect_uri=redirect_uri, secrets_file=sec_path)
+
 
 def get_available_token_files() -> List[Path]:
-    """Finds all available token.json files in root and tokens/ directory for multi-account quota rotation."""
-    TOKENS_DIR.mkdir(parents=True, exist_ok=True)
-    tokens = []
+    """Finds all available authenticated token.json files across configured account slots."""
+    slots = list_account_slots()
+    auth_toks = [s["token_path"] for s in slots if s["is_authenticated"]]
+    if auth_toks:
+        return auth_toks
     if TOKEN_FILE.exists():
-        tokens.append(TOKEN_FILE)
-    tokens.extend(sorted(list(TOKENS_DIR.glob("*.json"))))
-    tokens.extend(sorted([f for f in Path(".").glob("token_*.json") if f not in tokens]))
-    return tokens
+        return [TOKEN_FILE]
+    return []
 
 
 def get_credentials(token_path: Optional[Path] = None) -> Optional[Credentials]:
@@ -72,27 +410,18 @@ def get_authenticated_service(token_path: Optional[Path] = None):
     """
     creds = get_credentials(token_path)
     if not creds:
-        if not CLIENT_SECRETS_FILE.exists():
-            raise FileNotFoundError(
-                f"'{CLIENT_SECRETS_FILE}' not found. Place client_secrets.json in root."
-            )
-        raise RuntimeError("YouTube not authenticated. Complete Google OAuth sign-in first.")
-    return build("youtube", "v3", credentials=creds)
-    if not creds:
-        if not CLIENT_SECRETS_FILE.exists():
-            raise FileNotFoundError(
-                f"'{CLIENT_SECRETS_FILE}' not found. Place client_secrets.json in root."
-            )
-        raise RuntimeError("YouTube not authenticated. Complete Google OAuth sign-in first.")
+        target_token = Path(token_path) if token_path else TOKEN_FILE
+        raise RuntimeError(f"YouTube not authenticated for '{target_token.name}'. Complete Google OAuth sign-in first.")
     return build("youtube", "v3", credentials=creds)
 
 
-def get_auth_url(redirect_uri: str = DEFAULT_REDIRECT_URI) -> str:
+def get_auth_url(redirect_uri: str = DEFAULT_REDIRECT_URI, secrets_file: Optional[Path] = None) -> str:
     """Generates direct Google OAuth consent URL without PKCE constraint for bulletproof copy-paste token exchange."""
-    if not CLIENT_SECRETS_FILE.exists():
-        raise FileNotFoundError(f"'{CLIENT_SECRETS_FILE}' not found.")
+    target_sec = Path(secrets_file) if secrets_file else CLIENT_SECRETS_FILE
+    if not target_sec.exists():
+        raise FileNotFoundError(f"'{target_sec}' not found.")
     flow = InstalledAppFlow.from_client_secrets_file(
-        str(CLIENT_SECRETS_FILE),
+        str(target_sec),
         scopes=SCOPES,
         redirect_uri=redirect_uri
     )
@@ -101,12 +430,20 @@ def get_auth_url(redirect_uri: str = DEFAULT_REDIRECT_URI) -> str:
     return auth_url
 
 
-def exchange_code_for_token(code_or_url: str, redirect_uri: str = DEFAULT_REDIRECT_URI) -> Credentials:
+def exchange_code_for_token(
+    code_or_url: str,
+    redirect_uri: str = DEFAULT_REDIRECT_URI,
+    secrets_file: Optional[Path] = None,
+    token_file: Optional[Path] = None
+) -> Credentials:
     """
-    Exchanges authorization code (or full redirected callback URL) for tokens and saves token.json.
+    Exchanges authorization code (or full redirected callback URL) for tokens and saves token file.
     """
-    if not CLIENT_SECRETS_FILE.exists():
-        raise FileNotFoundError(f"'{CLIENT_SECRETS_FILE}' not found.")
+    target_sec = Path(secrets_file) if secrets_file else CLIENT_SECRETS_FILE
+    target_tok = Path(token_file) if token_file else TOKEN_FILE
+
+    if not target_sec.exists():
+        raise FileNotFoundError(f"'{target_sec}' not found.")
 
     raw = code_or_url.strip()
     if "code=" in raw:
@@ -117,7 +454,7 @@ def exchange_code_for_token(code_or_url: str, redirect_uri: str = DEFAULT_REDIRE
         code = raw
 
     flow = InstalledAppFlow.from_client_secrets_file(
-        str(CLIENT_SECRETS_FILE),
+        str(target_sec),
         scopes=SCOPES,
         redirect_uri=redirect_uri
     )
@@ -125,7 +462,8 @@ def exchange_code_for_token(code_or_url: str, redirect_uri: str = DEFAULT_REDIRE
     flow.fetch_token(code=code)
 
     creds = flow.credentials
-    with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+    target_tok.parent.mkdir(parents=True, exist_ok=True)
+    with open(target_tok, "w", encoding="utf-8") as f:
         f.write(creds.to_json())
 
     return creds
@@ -144,30 +482,48 @@ def find_available_port(preferred_port: int = 8080) -> int:
     return 0
 
 
-def run_local_server_auth(port: int = 8080, timeout_seconds: int = 60) -> Credentials:
+def run_local_server_auth(
+    port: int = 8080,
+    timeout_seconds: int = 60,
+    secrets_file: Optional[Path] = None,
+    token_file: Optional[Path] = None
+) -> Credentials:
     """
     Launches local OAuth listener on free port with a timeout to prevent hanging.
     """
-    if not CLIENT_SECRETS_FILE.exists():
-        raise FileNotFoundError(f"'{CLIENT_SECRETS_FILE}' not found.")
+    target_sec = Path(secrets_file) if secrets_file else CLIENT_SECRETS_FILE
+    target_tok = Path(token_file) if token_file else TOKEN_FILE
+
+    if not target_sec.exists():
+        raise FileNotFoundError(f"'{target_sec}' not found.")
 
     free_port = find_available_port(port)
-    flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRETS_FILE), SCOPES)
+    flow = InstalledAppFlow.from_client_secrets_file(str(target_sec), SCOPES)
     creds = flow.run_local_server(
         port=free_port,
         open_browser=True,
         timeout_seconds=timeout_seconds,
         success_message="Authentication successful! You can now close this tab and return to Zelmu Clipping."
     )
-    with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+    target_tok.parent.mkdir(parents=True, exist_ok=True)
+    with open(target_tok, "w", encoding="utf-8") as f:
         f.write(creds.to_json())
     return creds
 
 
-def get_channel_info(creds: Optional[Credentials] = None) -> Optional[Dict[str, str]]:
-    """Retrieves channel snippet for authenticated account."""
+def get_channel_info(creds: Optional[Credentials] = None, token_path: Optional[Path] = None, force_refresh: bool = False) -> Optional[Dict[str, str]]:
+    """Retrieves channel snippet for authenticated account with smart mtime caching."""
+    target_token = Path(token_path) if token_path else TOKEN_FILE
+    cache_key = str(target_token.resolve()) if target_token.exists() else str(target_token)
+
+    if not force_refresh and cache_key in _CHANNEL_INFO_CACHE:
+        cached_mtime, cached_info = _CHANNEL_INFO_CACHE[cache_key]
+        curr_mtime = target_token.stat().st_mtime if target_token.exists() else 0
+        if cached_mtime == curr_mtime:
+            return cached_info
+
     if creds is None:
-        creds = get_credentials()
+        creds = get_credentials(target_token)
     if not creds:
         return None
     try:
@@ -176,20 +532,28 @@ def get_channel_info(creds: Optional[Credentials] = None) -> Optional[Dict[str, 
         items = resp.get("items", [])
         if items:
             snip = items[0]["snippet"]
-            return {
+            info = {
                 "title": snip.get("title", "YouTube Channel"),
-                "customUrl": snip.get("customUrl", ""),
+                "customUrl": snip.get("customUrl", "") or "@zelmuesports",
                 "thumbnail": snip.get("thumbnails", {}).get("default", {}).get("url", "")
             }
-        return {"title": "Connected Account", "customUrl": "", "thumbnail": ""}
+        else:
+            info = {"title": "Connected Account", "customUrl": "@zelmuesports", "thumbnail": ""}
+        curr_mtime = target_token.stat().st_mtime if target_token.exists() else 0
+        _CHANNEL_INFO_CACHE[cache_key] = (curr_mtime, info)
+        return info
     except Exception as e:
-        return {"title": "Connected", "error": str(e)}
+        return {"title": "Connected", "customUrl": "@zelmuesports", "error": str(e)}
 
 
-def revoke_token():
-    """Removes token.json to disconnect current account."""
-    if TOKEN_FILE.exists():
-        TOKEN_FILE.unlink()
+def revoke_token(token_file: Optional[Path] = None):
+    """Removes specified token file (or default token.json) to disconnect account."""
+    target_tok = Path(token_file) if token_file else TOKEN_FILE
+    if target_tok.exists():
+        target_tok.unlink()
+    cache_key = str(target_tok.resolve()) if target_tok.exists() else str(target_tok)
+    if cache_key in _CHANNEL_INFO_CACHE:
+        del _CHANNEL_INFO_CACHE[cache_key]
 
 
 LOG_HEADERS = [
@@ -588,15 +952,19 @@ def upload_batch_private(
             except Exception:
                 pass
 
-    token_pool = get_available_token_files()
-    active_token_idx = 0
+    slots_pool = [s for s in list_account_slots() if s["is_authenticated"]]
+    active_slot_idx = 0
 
     def get_current_thread_client():
-        tok = token_pool[active_token_idx] if token_pool else None
+        with lock:
+            if slots_pool:
+                tok = slots_pool[active_slot_idx]["token_path"]
+            else:
+                tok = TOKEN_FILE
         return get_authenticated_service(tok)
 
     def worker_upload(idx: int, video_path: Path, pub_time: Optional[str]):
-        nonlocal completed_bytes, completed_count, quota_hit, active_token_idx
+        nonlocal completed_bytes, completed_count, quota_hit, active_slot_idx
         if quota_hit:
             return None
 
@@ -608,8 +976,8 @@ def upload_batch_private(
             progress_callback(idx + 1, total_count, file_name)
 
         if log_callback:
-            curr_tok_name = token_pool[active_token_idx].name if token_pool else "default"
-            log_callback(f"[Stream #{idx+1} | Acc: {curr_tok_name}] Uploading: {file_name} ({file_size / (1024*1024):.1f} MB)...")
+            curr_slot_name = slots_pool[active_slot_idx]["name"] if slots_pool else "Default Slot"
+            log_callback(f"[Stream #{idx+1} | {curr_slot_name}] Uploading: {file_name} ({file_size / (1024*1024):.1f} MB)...")
 
         # Thread-local YouTube API client
         yt_thread = get_current_thread_client()
@@ -646,27 +1014,42 @@ def upload_batch_private(
                     del active_transfers[file_name]
             err_msg = str(e)
             if "quotaExceeded" in err_msg or "uploadLimitExceeded" in err_msg:
-                # Multi-Account Quota Rotation: check if backup account token exists
+                # Multi-Project Quota Rotator: auto-rotate to next available authorized slot
+                rotated = False
                 with lock:
-                    if active_token_idx + 1 < len(token_pool):
-                        active_token_idx += 1
-                        next_tok = token_pool[active_token_idx]
+                    curr_slot = slots_pool[active_slot_idx] if slots_pool else {"name": "Default Slot", "slot_id": "default"}
+                    mark_slot_quota_exhausted(curr_slot.get("slot_id", "default"))
+                    if slots_pool and active_slot_idx + 1 < len(slots_pool):
+                        active_slot_idx += 1
+                        next_slot = slots_pool[active_slot_idx]
+                        rotated = True
                         if log_callback:
-                            log_callback(f"🔄 QUOTA LIMIT HIT on account #{active_token_idx}. Auto-rotating to backup token: {next_tok.name}...")
-                        # Retry uploading with the rotated token
-                        yt_rotated = get_authenticated_service(next_tok)
-                        return upload_single_video(
-                            yt_rotated,
-                            video_path,
-                            title=title_raw,
-                            publish_at=pub_time,
-                            chunk_callback=on_chunk
-                        )
-                quota_hit = True
-                msg = f"Daily YouTube upload quota reached on all available accounts at clip #{idx+1}. Remaining clips safely saved in ready_to_upload/."
-                if log_callback:
-                    log_callback(f"⚠️ {msg}")
-                return {"error": msg, "video_id": None}
+                            log_callback(
+                                f"🔄 QUOTA LIMIT HIT (10,000 units) on '{curr_slot.get('name', 'Current Slot')}'. "
+                                f"Seamlessly auto-rotating to slot '{next_slot.get('name', 'Next Slot')}' "
+                                f"(Target channel: {next_slot.get('channel_handle', '@zelmuesports')})..."
+                            )
+                if rotated:
+                    # Retry uploading with the rotated token/client on target channel
+                    next_tok = slots_pool[active_slot_idx]["token_path"]
+                    yt_rotated = get_authenticated_service(next_tok)
+                    return upload_single_video(
+                        yt_rotated,
+                        video_path,
+                        title=title_raw,
+                        publish_at=pub_time,
+                        chunk_callback=on_chunk
+                    )
+                else:
+                    quota_hit = True
+                    slot_cnt = len(slots_pool) if slots_pool else 1
+                    msg = (
+                        f"Daily YouTube upload quota reached across all {slot_cnt} configured account slot(s) "
+                        f"at clip #{idx+1}. Remaining clips safely saved in ready_to_upload/."
+                    )
+                    if log_callback:
+                        log_callback(f"⚠️ {msg}")
+                    return {"error": msg, "video_id": None}
             else:
                 if log_callback:
                     log_callback(f"❌ Error uploading {file_name}: {err_msg}")
