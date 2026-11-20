@@ -1524,66 +1524,6 @@ with tab2:
                                         st.rerun()
                     st.divider()
 
-    # Primary Client Secrets Uploader / Config
-    with st.expander("🔑 Primary OAuth Client Configuration / Replace Secrets", expanded=not CLIENT_SECRETS_FILE.exists()):
-        if curr_client_id:
-            st.caption(f"Configured Client ID: `{curr_client_id}`")
-        new_secrets_file = st.file_uploader("Upload new client_secrets.json from Google Cloud Console", type=["json"], key="up_secrets_json")
-        if new_secrets_file is not None:
-            try:
-                raw_text = new_secrets_file.read().decode("utf-8")
-                json.loads(raw_text)
-                with open(CLIENT_SECRETS_FILE, "w", encoding="utf-8") as f:
-                    f.write(raw_text)
-                revoke_token()
-                st.success("client_secrets.json updated successfully!")
-                st.rerun()
-            except Exception as ex:
-                st.error(f"Invalid JSON: {ex}")
-
-    # If Not Authenticated, show connection options
-    if CLIENT_SECRETS_FILE.exists() and not yt_connected:
-        st.markdown("""
-        <div style="background: rgba(234, 179, 8, 0.08); border: 1px solid rgba(234, 179, 8, 0.3); border-radius: 8px; padding: 14px; margin: 12px 0;">
-            <div style="font-weight: 700; color: #fbbf24; margin-bottom: 6px;">Connect YouTube Channel</div>
-            <div style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 12px;">Link your account once to upload clips directly as Private Shorts. Choose either method below:</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        auth_tab_auto, auth_tab_manual = st.tabs(["Method 1: One-Click Browser Login", "Method 2: Direct Link & Code"])
-
-        with auth_tab_auto:
-            st.caption("Opens Google's sign-in screen in your browser. (Auto-detects free local port)")
-            if st.button("Sign In with Google (Browser)", type="primary", use_container_width=True):
-                with st.spinner("Waiting for Google OAuth in your browser (60s timeout)..."):
-                    try:
-                        run_local_server_auth(port=8080, timeout_seconds=60)
-                        st.success("Successfully authenticated!")
-                        st.rerun()
-                    except Exception as err:
-                        st.error(f"Sign-in error: {err}")
-                        if "invalid_client" in str(err) or "10048" in str(err):
-                            st.info("💡 Note: Google reported Error 401 invalid_client. Ensure your OAuth 2.0 Client ID is active in Google Cloud Console.")
-
-        with auth_tab_manual:
-            try:
-                auth_url = get_auth_url()
-                st.markdown(f'<a href="{auth_url}" target="_blank" style="display:inline-block; background:#2563eb; color:white; padding:8px 14px; border-radius:6px; text-decoration:none; font-weight:600; margin-bottom:10px;">🔗 1. Open Google Sign-In in New Tab</a>', unsafe_allow_html=True)
-                code_input = st.text_input("2. Paste Redirect URL or Code from browser address bar:", key="oauth_code_in")
-                if st.button("Complete Sign-In", use_container_width=True):
-                    if code_input:
-                        try:
-                            exchange_code_for_token(code_input)
-                            st.success("Connected!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Token exchange error: {e}")
-                    else:
-                        st.warning("Please paste the URL or authorization code first.")
-            except Exception as e:
-                st.error(f"Error generating auth URL: {e}")
-                st.error(f"Error generating auth URL: {e}")
-
     # Monetization & Scheduling Options
     col_sc1, col_sc2 = st.columns([1, 1])
     with col_sc1:
@@ -1850,7 +1790,6 @@ with tab3:
         shorts_n = st.slider("Shorts per New Video", min_value=2, max_value=8, value=watcher_cfg.get("shorts_per_video", 4))
         auto_up = st.checkbox("🎯 Auto-Schedule to YouTube Studio", value=watcher_cfg.get("auto_upload", True), help="Automatically queues and schedules newly extracted Shorts across daily peak High-CPM slots")
         hook_bg = st.checkbox("🔥 Burn Frame-1 Viral Hook Badge", value=watcher_cfg.get("enable_hook_badge", True), help="Adds curiosity banner on frame 1 to maximize swipe-through CTR")
-        live_mon = st.checkbox("🔴 Live Stream Rolling Buffer (Clip active livestreams via HLS)", value=watcher_cfg.get("enable_live_monitoring", True), help="Taps active YouTube livestreams & renders Shorts from trailing window in real-time")
 
     if st.button("💾 Save Autopilot Configuration", use_container_width=True):
         raw_chs = st.session_state.get("txt_watcher_channels", "")
@@ -1860,7 +1799,6 @@ with tab3:
         watcher_cfg["shorts_per_video"] = shorts_n
         watcher_cfg["auto_upload"] = auto_up
         watcher_cfg["enable_hook_badge"] = hook_bg
-        watcher_cfg["enable_live_monitoring"] = live_mon
         save_watcher_config(watcher_cfg)
         st.success(f"✓ Autopilot configuration saved! ({len(parsed_channels)} target channels registered)")
 
