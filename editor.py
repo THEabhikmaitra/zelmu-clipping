@@ -719,7 +719,7 @@ def render_mode_b_short(
         "-c:a", "aac", "-b:a", "128k",
         str(output_short_path)
     ]
-    mix_res = subprocess.run(mix_cmd, capture_output=True, text=True, timeout=120)
+    mix_res = run_ffmpeg_with_cpu_fallback(mix_cmd, timeout=120)
     if mix_res.returncode != 0:
         raise RuntimeError(f"Audio mix failed:\n{mix_res.stderr}")
 

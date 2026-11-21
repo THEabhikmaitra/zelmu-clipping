@@ -14,6 +14,7 @@ import sys
 import re
 import json
 import time
+import shutil
 import threading
 import subprocess
 import requests
@@ -516,6 +517,24 @@ def scan_and_calculate_account_reels(
     }
 
 
+_OLLAMA_ONLINE_CACHE: Optional[bool] = None
+_OLLAMA_CHECK_TIME: float = 0.0
+
+def is_ollama_online() -> bool:
+    """Fast non-blocking check with 45s TTL to avoid 18s timeouts when Ollama is offline."""
+    global _OLLAMA_ONLINE_CACHE, _OLLAMA_CHECK_TIME
+    now = time.time()
+    if _OLLAMA_ONLINE_CACHE is not None and (now - _OLLAMA_CHECK_TIME < 45):
+        return _OLLAMA_ONLINE_CACHE
+    try:
+        r = requests.get("http://localhost:11434/api/version", timeout=1.0)
+        _OLLAMA_ONLINE_CACHE = (r.status_code == 200)
+    except Exception:
+        _OLLAMA_ONLINE_CACHE = False
+    _OLLAMA_CHECK_TIME = now
+    return _OLLAMA_ONLINE_CACHE
+
+
 def convert_caption_to_youtube_seo(caption: str, uploader: str = "") -> Dict[str, Any]:
     """
     Converts raw Instagram caption to YouTube SEO Title, Description, and Tags
@@ -526,7 +545,8 @@ def convert_caption_to_youtube_seo(caption: str, uploader: str = "") -> Dict[str
     lead_sentence = clean_lines[0] if clean_lines else "Unbelievable Viral Moment"
     account_handle = f"@{uploader.lstrip('@')}" if uploader else "@creator"
 
-    prompt = f"""You are a YouTube Shorts SEO specialist. Convert this Instagram Reel caption into a high-CTR YouTube Short title and description:
+    if is_ollama_online():
+        prompt = f"""You are a YouTube Shorts SEO specialist. Convert this Instagram Reel caption into a high-CTR YouTube Short title and description:
 Caption: "{lead_sentence[:120]}"
 Original Creator: {account_handle}
 
@@ -536,18 +556,18 @@ Return ONLY JSON:
   "description": "Engaging description with credit to {account_handle}",
   "tags": ["Tag1", "Tag2", "Tag3", "Shorts"]
 }}"""
-    try:
-        res = query_ollama_json(prompt, retries=1, timeout=18)
-        if res and isinstance(res, dict) and "title" in res:
-            t_raw = res.get("title", "")
-            t_clean = t_raw if "#shorts" in t_raw.lower() else f"{t_raw} #Shorts"
-            return {
-                "title": t_clean[:70],
-                "description": f"{res.get('description', '')}\n\nCredit: {account_handle}\n\n#Shorts #Trending",
-                "tags": [t for t in res.get("tags", []) if isinstance(t, str)][:10] or ["Shorts", "Viral", "Trending"]
-            }
-    except Exception:
-        pass
+        try:
+            res = query_ollama_json(prompt, retries=1, timeout=12)
+            if res and isinstance(res, dict) and "title" in res:
+                t_raw = res.get("title", "")
+                t_clean = t_raw if "#shorts" in t_raw.lower() else f"{t_raw} #Shorts"
+                return {
+                    "title": t_clean[:70],
+                    "description": f"{res.get('description', '')}\n\nCredit: {account_handle}\n\n#Shorts #Trending",
+                    "tags": [t for t in res.get("tags", []) if isinstance(t, str)][:10] or ["Shorts", "Viral", "Trending"]
+                }
+        except Exception:
+            pass
 
     base_title = lead_sentence[:50].strip()
     title = f"{base_title.title()} 🤯 #Shorts" if len(base_title) <= 50 else f"{base_title[:45].title()}... #Shorts"
@@ -726,6 +746,13 @@ def process_instagram_reel(
         print(f"Error saving sidecar: {e}")
 
     log(f"✓ Successfully processed: {final_mp4.name} (Ready for Stage 3 Quality Check)")
+
+    # Clean up intermediate scratch workspace to prevent mass production disk leaks
+    try:
+        shutil.rmtree(work_dir, ignore_errors=True)
+    except Exception:
+        pass
+
     return final_mp4
 
 
