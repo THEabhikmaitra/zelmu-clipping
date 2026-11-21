@@ -450,7 +450,8 @@ def render_mode_a_short(
     hook_title: Optional[str] = None,
     enable_anti_content_id: bool = True,
     enable_music_ducking: bool = False,
-    enable_sfx: bool = True
+    enable_sfx: bool = True,
+    enable_pacing_zoom: bool = True
 ) -> Path:
     """
     Renders Mode A viral short:
@@ -491,6 +492,8 @@ def render_mode_a_short(
 
     # Single-pass scale and anti-content-id evasion: scales directly to target dimensions
     scale_expr = "scale=1084:1928,crop=1080:1920:2:4" if enable_anti_content_id else "scale=1080:1920"
+    # Micro-pacing punch-in cut (3.2s cycle: alternating 1.0x and 1.08x zoom to reset viewer attention & boost retention)
+    zoom_filter = ",zoompan=z='if(mod(floor(on/90),2),1.08,1.0)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30" if enable_pacing_zoom else ""
 
     tracking_keys = None
     if enable_tracking and not split_layout:
@@ -505,14 +508,14 @@ def render_mode_a_short(
         crop_x = generate_panning_crop_expr(tracking_keys)
         base_filter = (
             f"[0:v]crop=in_h*9/16:in_h:'{crop_x}':0,"
-            f"{scale_expr},"
+            f"{scale_expr}{zoom_filter},"
             f"subtitles='{esc_sub}'"
             f"{hook_filter_str}"
         )
     elif not split_layout:
         base_filter = (
             f"[0:v]crop=in_h*9/16:in_h:(in_w-in_h*9/16)/2:0,"
-            f"{scale_expr},"
+            f"{scale_expr}{zoom_filter},"
             f"subtitles='{esc_sub}'"
             f"{hook_filter_str}"
         )
@@ -530,7 +533,7 @@ def render_mode_a_short(
             f"[cam]crop=in_w*0.35:in_h*0.45:{cam_xy},scale=1080:672[top];"
             f"[game]crop=in_h*9/16:in_h:(in_w-in_h*9/16)/2:0,scale=1080:1248[bot];"
             f"[top][bot]vstack=inputs=2"
-            f"{stack_cid},"
+            f"{stack_cid}{zoom_filter},"
             f"subtitles='{esc_sub}'"
             f"{hook_filter_str}"
         )

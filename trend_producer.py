@@ -30,6 +30,7 @@ from editor import (
 )
 from uploader import upload_batch_private, is_authenticated
 from trends_hunter import get_trend_news_articles, search_trend_source_videos
+from learning_engine import get_learned_seo_boost, get_optimized_prompt_injection
 from arbiter import (
     acquire_compute_lock,
     release_compute_lock,
@@ -42,48 +43,49 @@ WORKSPACE_DIR = Path("workspace")
 
 
 def build_fallback_scripts(query: str, breakdown: List[str], news_titles: List[str]) -> Dict[str, Any]:
-    """Generates guaranteed viral scripts when Ollama is offline or busy."""
+    """Generates guaranteed viral scripts with Frame-0 Hooks and Seamless Loops when Ollama is offline or busy."""
     sub_topic1 = breakdown[1] if len(breakdown) > 1 else query
     sub_topic2 = breakdown[2] if len(breakdown) > 2 else query
     news_snippet = news_titles[0] if news_titles else f"New breaking developments regarding {query} have just emerged."
 
+    # Top-retention architecture: Frame-0 hook + 40-48 words + seamless loop bridge clause ending
     shorts = [
         {
             "hook": f"⚡ SHOCKING {query.upper()}",
             "title": f"The Shocking Truth About {query.title()}",
-            "script": f"You won't believe what just happened with {query}! In the past few hours, searches have exploded by thousands of percent. {news_snippet} People across the country are scrambling to find out what's really going on. Drop a comment below if you saw this coming!"
+            "script": f"Nobody was prepared for what just happened with {query}! In the past few hours, searches exploded by thousands of percent across the country. {news_snippet} Experts are warning this will reshape the conversation around {sub_topic1}, and the reason nobody saw this coming is that..."
         },
         {
             "hook": f"🚨 BREAKING {query.upper()}",
             "title": f"Breaking Update: What Happened With {query.title()}",
-            "script": f"Breaking news right now on {query}! If you haven't checked the news in the last hour, this is what you missed. Massive reports are confirming major developments around {sub_topic1}. Make sure you hit subscribe to stay updated on this unfolding story!"
+            "script": f"Stop scrolling if you haven't seen the breaking update on {query}! In the last hour alone, massive reports confirmed huge developments tied directly to {sub_topic1}. While mainstream feeds are playing catch-up, the real breakthrough all traces back to..."
         },
         {
             "hook": f"🤯 3 INSANE FACTS",
             "title": f"3 Insane Details About {query.title()}",
-            "script": f"Here are three insane details about {query} that nobody is talking about! Number one: this breakout started just hours ago and immediately shot to the top of Google. Number two: related searches for {sub_topic1} have jumped over five hundred percent. And number three: experts are warning this is far from over!"
+            "script": f"Three insane facts about {query} that will blow your mind! Number one: search volume broke national records in under sixty minutes. Number two: alerts for {sub_topic1} jumped five hundred percent. And number three: the only thing everyone wants to know is..."
         },
         {
             "hook": f"⚠️ WHY EVERYONE IS TALKING",
             "title": f"Why Everyone Is Searching {query.title()}",
-            "script": f"Why is everybody talking about {query} right now? It all started when breaking reports surfaced online and went completely viral. Now, millions of people are asking what this means for {sub_topic2}. Let me know your honest thoughts in the comments!"
+            "script": f"Why is everybody suddenly obsessed with {query} right now? It all started when breaking reports surfaced online and caught the entire internet off guard. Millions are asking what this means for {sub_topic2}, which explains why..."
         },
         {
             "hook": f"🔍 DEEP ANALYSIS",
             "title": f"The Full Breakdown on {query.title()}",
-            "script": f"Let's break down exactly what is happening with {query}. The latest data shows an unprecedented spike in interest over the last four hours. With reports centering on {sub_topic1}, the situation is changing every single minute. Here is the full story."
+            "script": f"Here is the hidden truth about {query} you probably missed! The latest verified data reveals an unprecedented surge in interest centered on {sub_topic1}. While rumors are spreading wildly, the confirmed timeline proves..."
         },
         {
-            "hook": f"🔥 FINAL UPDATE",
+            "hook": f"🔥 FINAL VERDICT",
             "title": f"The Final Truth on {query.title()}",
-            "script": f"This is the latest update you need to see on {query}. Despite all the rumors circulating online, the confirmed facts show that {sub_topic2} is at the center of this viral moment. Stay tuned as more information breaks!"
+            "script": f"This changes everything we knew about {query}! Despite all the conflicting speculation online, verified facts show {sub_topic2} is at the absolute center of this viral moment. And if you still don't believe it..."
         }
     ]
 
     landscapes = [
         {
             "title": f"The Complete Story Behind {query.title()} (Full Breakdown)",
-            "script": f"Welcome back. Over the last four hours, a massive breakout story has taken over the internet: {query}. In this video, we are breaking down everything that has unfolded from start to finish. First, let's examine how this trend originated and why search volume skyrocketed by thousands of percent. Major reports from news outlets have highlighted key moments, including {news_snippet}. Furthermore, related developments around {sub_topic1} and {sub_topic2} have raised serious questions. We will examine the data, the eyewitness reactions, and what to expect next. Let us know your perspective in the comments, and don't forget to like and subscribe for more real-time breakdowns."
+            "script": f"Over the last four hours, a massive breakout story has taken over the internet: {query}. In this video, we are breaking down everything that has unfolded from start to finish. First, let's examine how this trend originated and why search volume skyrocketed by thousands of percent. Major reports from news outlets have highlighted key moments, including {news_snippet}. Furthermore, related developments around {sub_topic1} and {sub_topic2} have raised serious questions. We will examine the data, the eyewitness reactions, and what to expect next. Let us know your perspective in the comments, and don't forget to like and subscribe for more real-time breakdowns."
         },
         {
             "title": f"What Nobody Is Telling You About {query.title()}",
@@ -95,24 +97,38 @@ def build_fallback_scripts(query: str, breakdown: List[str], news_titles: List[s
 
 
 def generate_scripts_for_trend(trend: Dict[str, Any]) -> Dict[str, Any]:
-    """Generates 6 Short scripts and 2 Long Video scripts from trend data via Ollama or fallback."""
+    """Generates 6 Short scripts (with seamless loops) and 2 Long Video scripts from trend data via Ollama or fallback."""
     query = trend.get("query", "Viral Topic")
     breakdown = trend.get("trend_breakdown", [query])
     news_articles = trend.get("news_articles", [])
     news_titles = [a["title"] for a in news_articles if isinstance(a, dict) and "title" in a]
 
-    # Try Ollama JSON generation
-    prompt = f"""You are an elite YouTube viral scriptwriter.
+    # Ingest Stage 6 Continuous Learning parameters
+    learned_seo = get_learned_seo_boost()
+    learned_prompt = get_optimized_prompt_injection()
+    learned_tags = learned_seo.get("high_cpm_tags", [])
+    target_sec = learned_prompt.get("target_duration_sec", 32.0)
+    target_words = learned_prompt.get("target_word_count", 48)
+
+    # Try Ollama JSON generation with strict retention rules
+    prompt = f"""You are an elite YouTube Shorts viral producer.
 A topic is currently experiencing a massive breakout in the United States:
 Topic: "{query}"
 Related keywords: {breakdown[:5]}
 Recent headlines: {news_titles[:3]}
+Learned High-CPM tags: {learned_tags[:5]}
+Target video duration: {target_sec} seconds (~{target_words} words per Short)
 
-Write 6 high-energy viral Shorts scripts (each 40-50 words, 9:16 format) and 2 compelling Landscape video scripts (each 200-250 words, 16:9 format).
+MANDATORY VIRAL RETENTION RULES:
+1. FRAME 0 HOOK: Start immediately with high curiosity, tension, or surprise. NEVER use greetings or intros ('Hey guys', 'Welcome back' are strictly forbidden).
+2. SEAMLESS LOOP: For each Short, the final sentence MUST grammatically connect into the opening hook phrase so the video loops endlessly when replayed.
+3. CONCISE PACING: Strict 40-50 words per Short for maximum Average Percentage Viewed (APV > 80%).
+
+Write 6 high-energy viral Shorts scripts (each 40-50 words, 9:16 format) and 2 compelling Landscape video scripts (each 180-220 words, 16:9 format).
 Return ONLY JSON with this schema:
 {{
   "shorts": [
-    {{"hook": "⚡ SHORT HOOK", "title": "Catchy Title", "script": "Full spoken voiceover script text..."}},
+    {{"hook": "⚡ SHORT HOOK", "title": "Catchy Title", "script": "Full spoken voiceover script text ending with seamless loop bridge clause..."}},
     ... (6 total)
   ],
   "landscapes": [
@@ -342,6 +358,7 @@ def produce_trend_package(
                 split_layout=False,
                 enable_tracking=False,
                 hook_title=hook_txt,
+                enable_pacing_zoom=True,       # 3.2s dynamic punch-in attention resets
                 enable_anti_content_id=False,  # NO pitch shift / audio speed altering
                 enable_music_ducking=False,    # NO phonk beat
                 enable_sfx=False               # NO punch / whoosh sound
@@ -355,6 +372,9 @@ def produce_trend_package(
                 with open(sidecar_p, "w", encoding="utf-8") as sf:
                     json.dump({
                         "title": reel_title_clean[:100],
+                        "seamless_loop": True,
+                        "pacing_zoom": True,
+                        "hook_title": hook_txt,
                         "description": (
                             f"🔥 {reel_title}\n\n"
                             f"{script_txt}\n\n"
