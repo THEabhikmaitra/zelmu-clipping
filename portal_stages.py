@@ -6,6 +6,7 @@ end-to-end data interconnection across all stages.
 
 import json
 import time
+import shutil
 import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -82,10 +83,188 @@ def get_pipeline_telemetry(ready_dir: Path) -> Dict[str, Any]:
     }
 
 
+def get_system_telemetry_snapshot() -> Dict[str, Any]:
+    """Captures real-time system, drive, crawler, quota, and AI telemetry parameters."""
+    try:
+        du = shutil.disk_usage(".")
+        free_gb = du.free / (1024 ** 3)
+        total_gb = du.total / (1024 ** 3)
+        free_pct = (du.free / du.total) * 100
+    except Exception:
+        free_gb, total_gb, free_pct = 0.0, 0.0, 0.0
+
+    def calc_dir_mb(p: Path) -> float:
+        if not p.exists():
+            return 0.0
+        return sum(f.stat().st_size for f in p.glob("**/*") if f.is_file()) / (1024 * 1024)
+
+    ready_mb = calc_dir_mb(Path("ready_to_upload"))
+    workspace_mb = calc_dir_mb(Path("workspace"))
+
+    try:
+        from instagram_scraper import load_crawler_state
+        c_state = load_crawler_state()
+        crawler_status = c_state.get("status", "idle")
+        crawler_account = c_state.get("account", "None")
+        crawler_q = len(c_state.get("reels_queue", []))
+        crawler_done = len(c_state.get("completed_ids", []))
+        crawler_fail = len(c_state.get("failed_ids", []))
+        crawler_caption = c_state.get("current_reel_caption", "")
+    except Exception:
+        crawler_status, crawler_account, crawler_q, crawler_done, crawler_fail, crawler_caption = "idle", "None", 0, 0, 0, ""
+
+    try:
+        from editor import get_best_video_encoder
+        enc_args = get_best_video_encoder()
+        enc_name = "Intel QSV (h264_qsv)" if "h264_qsv" in str(enc_args) else "CPU (libx264)"
+    except Exception:
+        enc_name = "CPU (libx264)"
+
+    try:
+        from instagram_scraper import is_ollama_online
+        ollama_ok = is_ollama_online()
+    except Exception:
+        ollama_ok = False
+
+    try:
+        from uploader import CLIENT_SECRETS_FILE
+        token_files = list(Path(".").glob("token_*.json"))
+        if Path("token.json").exists():
+            token_files.append(Path("token.json"))
+        has_secrets = CLIENT_SECRETS_FILE.exists()
+        token_count = len(token_files)
+    except Exception:
+        has_secrets = False
+        token_count = 0
+
+    return {
+        "free_gb": free_gb,
+        "total_gb": total_gb,
+        "free_pct": free_pct,
+        "ready_mb": ready_mb,
+        "workspace_mb": workspace_mb,
+        "crawler_status": crawler_status,
+        "crawler_account": crawler_account,
+        "crawler_q": crawler_q,
+        "crawler_done": crawler_done,
+        "crawler_fail": crawler_fail,
+        "crawler_caption": crawler_caption,
+        "enc_name": enc_name,
+        "ollama_ok": ollama_ok,
+        "has_secrets": has_secrets,
+        "token_count": token_count
+    }
+
+
+def _render_telemetry_metrics_grid(snap: Dict[str, Any]):
+    free_gb = snap["free_gb"]
+    total_gb = snap["total_gb"]
+    free_pct = snap["free_pct"]
+    if free_gb < 3.0:
+        disk_badge = "<span style='color:#ef4444; font-weight:700;'>🔴 CRITICAL (&lt;3GB AUTO-PAUSE)</span>"
+    elif free_gb < 10.0:
+        disk_badge = "<span style='color:#f59e0b; font-weight:700;'>🟡 LOW (&lt;10GB)</span>"
+    else:
+        disk_badge = "<span style='color:#10b981; font-weight:700;'>🟢 HEALTHY</span>"
+
+    cr_stat = snap["crawler_status"].upper()
+    cr_color = "#10b981" if cr_stat == "RUNNING" else ("#f59e0b" if cr_stat == "PAUSED" else "#38bdf8")
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.markdown(
+            f"""
+            <div style="border:1px solid #27272a; border-radius:6px; padding:10px; background:#18181b;">
+                <div style="color:#a1a1aa; font-size:0.70rem; font-weight:600; text-transform:uppercase;">💾 Drive & Scratch Storage</div>
+                <div style="font-size:1.15rem; font-weight:700; color:#f4f4f5; margin:4px 0;">{free_gb:.1f} GB Free</div>
+                <div style="font-size:0.75rem; color:#a1a1aa;">{disk_badge} | {free_pct:.0f}% of {total_gb:.0f}GB</div>
+                <div style="font-size:0.72rem; color:#71717a; margin-top:4px;">Ready: {snap['ready_mb']:.1f}MB | Temp: {snap['workspace_mb']:.1f}MB</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with m2:
+        st.markdown(
+            f"""
+            <div style="border:1px solid #27272a; border-radius:6px; padding:10px; background:#18181b;">
+                <div style="color:#a1a1aa; font-size:0.70rem; font-weight:600; text-transform:uppercase;">📸 Instagram Crawler Daemon</div>
+                <div style="font-size:1.15rem; font-weight:700; color:{cr_color}; margin:4px 0;">{cr_stat} ({snap['crawler_done']}/{snap['crawler_q']})</div>
+                <div style="font-size:0.75rem; color:#a1a1aa;">Target: <b>@{snap['crawler_account']}</b> | Fail: {snap['crawler_fail']}</div>
+                <div style="font-size:0.72rem; color:#71717a; margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Reel: {snap['crawler_caption'][:28] or 'None active'}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with m3:
+        sec_color = "#10b981" if snap["has_secrets"] else "#ef4444"
+        sec_txt = "Secrets OK" if snap["has_secrets"] else "No Secrets"
+        st.markdown(
+            f"""
+            <div style="border:1px solid #27272a; border-radius:6px; padding:10px; background:#18181b;">
+                <div style="color:#a1a1aa; font-size:0.70rem; font-weight:600; text-transform:uppercase;">🚀 YouTube Quotas & Pool</div>
+                <div style="font-size:1.15rem; font-weight:700; color:#f4f4f5; margin:4px 0;">{snap['token_count']} Channels</div>
+                <div style="font-size:0.75rem; color:{sec_color}; font-weight:600;">{sec_txt} | 10k Quota Limiter</div>
+                <div style="font-size:0.72rem; color:#71717a; margin-top:4px;">Drip Scheduling: 4-6 clips/day</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    with m4:
+        ol_color = "#10b981" if snap["ollama_ok"] else "#f59e0b"
+        ol_txt = "🟢 Ollama Online" if snap["ollama_ok"] else "🟡 Fast Regex SEO"
+        st.markdown(
+            f"""
+            <div style="border:1px solid #27272a; border-radius:6px; padding:10px; background:#18181b;">
+                <div style="color:#a1a1aa; font-size:0.70rem; font-weight:600; text-transform:uppercase;">⚡ Video Engine & AI</div>
+                <div style="font-size:1.15rem; font-weight:700; color:#a855f7; margin:4px 0;">{snap['enc_name']}</div>
+                <div style="font-size:0.75rem; color:{ol_color};">{ol_txt}</div>
+                <div style="font-size:0.72rem; color:#71717a; margin-top:4px;">Safe Zone: 9:16 vertical + CPU Failsafe</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+
+if hasattr(st, "dialog"):
+    @st.dialog("📊 Production Telemetry & System Parameters", width="large")
+    def show_system_telemetry_dialog():
+        snap = get_system_telemetry_snapshot()
+        _render_telemetry_metrics_grid(snap)
+        st.write("")
+        b1, b2, b3 = st.columns(3)
+        with b1:
+            if snap["crawler_status"] == "running":
+                if st.button("⏸️ Pause Instagram Crawler", use_container_width=True, key="dlg_pause"):
+                    from instagram_scraper import pause_crawler
+                    pause_crawler()
+                    st.rerun()
+            else:
+                if st.button("▶️ Resume Instagram Crawler", use_container_width=True, key="dlg_resume"):
+                    from instagram_scraper import start_or_resume_crawler
+                    start_or_resume_crawler()
+                    st.rerun()
+        with b2:
+            if st.button("🧹 Purge Stale Scratch Workspaces", use_container_width=True, key="dlg_purge"):
+                from learning_engine import cleanup_stale_workspaces
+                cleanup_stale_workspaces(max_age_hours=0)
+                st.success("Cleaned scratch files!")
+                st.rerun()
+        with b3:
+            if st.button("🔄 Refresh Telemetry", use_container_width=True, key="dlg_refresh"):
+                st.rerun()
+else:
+    def show_system_telemetry_dialog():
+        pass
+
+
 def render_pipeline_ribbon(ready_dir: Path):
     """
     Renders top global telemetry ribbon showing real-time interconnected flow:
     1. Research -> 2. Production -> 3. Quality Gate -> 4. Upload Queue -> 5. Analytics -> 6. Learning Flywheel
+    Includes persistent Live Parameter Sheet and Full-Screen Telemetry Dialog.
     """
     telem = get_pipeline_telemetry(ready_dir)
 
@@ -121,6 +300,21 @@ def render_pipeline_ribbon(ready_dir: Path):
     with c6:
         opt_s = telem["optimal_sec"]
         st.markdown(f"<div style='border:1px solid #27272a; border-radius:6px; padding:6px; background:#121215; text-align:center;'><span style='color:#a1a1aa; font-size:0.68rem;'>6. LEARNING</span><br><b style='color:#ec4899; font-size:0.78rem;'>{opt_s}s Sweet Spot</b></div>", unsafe_allow_html=True)
+
+    # Telemetry Snapshot & Interactive Parameter Sheet
+    snap = get_system_telemetry_snapshot()
+    free_gb = snap["free_gb"]
+    cr_stat = snap["crawler_status"].upper()
+    enc_name = snap["enc_name"]
+    q_str = f"{snap['crawler_done']}/{snap['crawler_q']}"
+
+    sheet_label = f"📊 Live Telemetry & Parameters Sheet [💾 Disk: {free_gb:.1f}GB Free | 📸 Crawler: {cr_stat} ({q_str}) | ⚡ {enc_name}]"
+    with st.expander(sheet_label, expanded=False):
+        _render_telemetry_metrics_grid(snap)
+        if hasattr(st, "dialog"):
+            st.write("")
+            if st.button("🔍 Open Full-Screen Telemetry & Health Modal", key="btn_open_telem_modal", use_container_width=True):
+                show_system_telemetry_dialog()
 
     st.write("")
 
