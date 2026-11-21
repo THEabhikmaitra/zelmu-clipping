@@ -2685,10 +2685,13 @@ def render_instagram_clipper():
 
     # Auto-Calculate Action
     if scan_btn and target_uname.strip():
+        active_sess = sess_input.strip() or saved_sess
+        if sess_input.strip() and sess_input.strip() != saved_sess:
+            save_session_cookie(sess_input.strip())
         with st.spinner(f"Connecting to Instagram & calculating all reels for '{target_uname}'..."):
             calc_data = scan_and_calculate_account_reels(
                 target=target_uname.strip(),
-                session_id=sess_input.strip() or saved_sess,
+                session_id=active_sess,
                 limit=scan_limit
             )
             st.session_state["insta_calc_data"] = calc_data

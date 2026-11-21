@@ -568,11 +568,19 @@ def download_instagram_video(
     """Downloads an Instagram Reel MP4 with Direct CDN primary and yt-dlp fallback."""
     output_mp4.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1. Direct CDN Stream Download (Fastest, zero rate-limit)
-    if download_reel_direct_cdn(url, output_mp4):
+    sess_id = get_session_cookie()
+
+    # 1. Direct CDN Stream Download (Fastest, zero rate-limit, uses saved sessionid)
+    if download_reel_direct_cdn(url, output_mp4, session_id=sess_id):
         return output_mp4
 
-    # 2. yt-dlp fallback
+    # 2. Auto-build Netscape cookies for yt-dlp if not provided
+    if not cookies_path and sess_id:
+        temp_cookie_p = WORKSPACE_DIR / "temp_insta_cookies.txt"
+        build_netscape_cookies_file(sess_id, temp_cookie_p)
+        cookies_path = str(temp_cookie_p)
+
+    # 3. yt-dlp fallback
     part_mp4 = output_mp4.with_suffix(".part.mp4")
     cmd = [
         *get_ytdlp_cmd(),
