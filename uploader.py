@@ -645,26 +645,58 @@ def log_upload(
         ])
 
 
-def format_seo_title(raw_title: str) -> str:
-    """Cleans and optimizes title with high-CTR keywords and #Shorts tag."""
+def format_seo_title(raw_title: str, is_short: bool = True) -> str:
+    """Cleans and optimizes title with high-CTR keywords within YouTube's strict 100-char limit."""
     import re
-    cleaned = raw_title.replace("_", " ").strip()
+    # Remove prohibited characters in YouTube titles (<, >)
+    cleaned = raw_title.replace("<", "").replace(">", "").replace("_", " ").strip()
+    # Strip any accidental redundant duration tokens (e.g. '30s')
     cleaned = re.sub(r'\b\d+s\b', '', cleaned).strip()
+    # Deduplicate repeated phrase '(Full Breakdown) (Full Breakdown)'
+    cleaned = re.sub(r'(\(Full Breakdown\)\s*)+', '(Full Breakdown) ', cleaned).strip()
+
     if not cleaned:
         cleaned = "Trending Update"
 
-    # Only append #GTA6 if this is explicitly a GTA clip
-    if "gta" in cleaned.lower():
-        full_title = f"{cleaned} 🤯 #GTA6 #Shorts"
-    elif "#shorts" in cleaned.lower():
-        full_title = cleaned
-    elif "short" in cleaned.lower():
-        full_title = f"{cleaned} #Shorts"
+    if is_short:
+        if "gta" in cleaned.lower():
+            if "#shorts" not in cleaned.lower() and "#gta6" not in cleaned.lower():
+                tag = " 🤯 #GTA6 #Shorts"
+            elif "#shorts" not in cleaned.lower():
+                tag = " #Shorts"
+            else:
+                tag = ""
+        else:
+            tag = " #Shorts" if "#shorts" not in cleaned.lower() else ""
+    else:
+        # Long/landscape video
+        if "gta" in cleaned.lower() and "#gta6" not in cleaned.lower() and "gta 6" not in cleaned.lower():
+            tag = " #GTA6"
+        else:
+            tag = ""
+
+    # Combine with tag if budget permits
+    if tag:
+        if len(cleaned) + len(tag) <= 100:
+            full_title = f"{cleaned}{tag}"
+        else:
+            avail = 100 - len(tag) - 3
+            if avail > 10:
+                full_title = f"{cleaned[:avail].rstrip()}...{tag}"
+            else:
+                full_title = cleaned[:100]
     else:
         full_title = cleaned
 
+    # Final guarantee: strictly 1..100 characters, no < or >
+    full_title = full_title.replace("<", "").replace(">", "").strip()
     if len(full_title) > 100:
-        full_title = full_title[:90] + "... #Shorts"
+        full_title = full_title[:97].rstrip() + "..."
+    if len(full_title) > 100:
+        full_title = full_title[:100]
+    if not full_title:
+        full_title = "Trending Update"
+
     return full_title
 
 
@@ -804,7 +836,8 @@ def upload_single_video(
     file_size_bytes = file_path.stat().st_size
     file_size_mb = file_size_bytes / (1024 * 1024)
 
-    full_title = format_seo_title(title)
+    is_short = ("video_" not in file_path.name.lower())
+    full_title = format_seo_title(title, is_short=is_short)
 
     if tags:
         full_tags = list(tags[:30])
@@ -1225,8 +1258,14 @@ def upload_batch_private(
                 emit_telemetry()
 
             for fut in future_to_idx:
-                res = fut.result()
-                if res:
-                    results.append(res)
+                try:
+                    res = fut.result()
+                    if res:
+                        results.append(res)
+                except Exception as err:
+                    if "quotaExceeded" in str(err) or "dailyLimitExceeded" in str(err):
+                        raise err
+                    if log_callback:
+                        log_callback(f"⚠️ Video upload failed: {err}")
 
     return results

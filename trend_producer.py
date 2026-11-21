@@ -348,12 +348,13 @@ def produce_trend_package(
             )
             cut_vis.unlink(missing_ok=True)
 
+            reel_title_clean = reel_title if "#shorts" in reel_title.lower() else f"{reel_title} #Shorts"
             # Generate sidecar metadata JSON for YouTube Studio (Trend-specific, NO GTA6!)
             sidecar_p = final_mp4.with_suffix(".json")
             try:
                 with open(sidecar_p, "w", encoding="utf-8") as sf:
                     json.dump({
-                        "title": f"{reel_title} #Shorts",
+                        "title": reel_title_clean[:100],
                         "description": (
                             f"🔥 {reel_title}\n\n"
                             f"{script_txt}\n\n"
@@ -423,12 +424,13 @@ def produce_trend_package(
             ]
             res = subprocess.run(land_cmd, capture_output=True)
             if res.returncode == 0 and is_valid_video_file(final_land_mp4):
+                l_title_clean = l_title if "(full breakdown)" in l_title.lower() else f"{l_title} (Full Breakdown)"
                 # Generate sidecar metadata JSON for YouTube Studio (Trend-specific, NO GTA6!)
                 sidecar_land = final_land_mp4.with_suffix(".json")
                 try:
                     with open(sidecar_land, "w", encoding="utf-8") as sf:
                         json.dump({
-                            "title": f"{l_title} (Full Breakdown)",
+                            "title": l_title_clean[:100],
                             "description": (
                                 f"The full breakdown of {query}.\n\n"
                                 f"{l_script}\n\n"
