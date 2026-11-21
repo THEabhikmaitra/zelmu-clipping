@@ -2797,8 +2797,8 @@ def render_instagram_clipper():
                 st.success("✓ Resumed crawler from exact checkpoint!")
                 st.rerun()
         elif crawler_status != "running":
-            reels_to_start = calc_data.get("reels", []) if calc_data else []
-            acc_to_start = calc_data.get("account", target_uname.strip().lstrip("@")) if calc_data else target_uname.strip().lstrip("@")
+            reels_to_start = (calc_data.get("reels", []) if calc_data else []) or c_state.get("reels_queue", [])
+            acc_to_start = (calc_data.get("account") if calc_data else "") or c_state.get("account", "") or target_uname.strip().lstrip("@")
             can_start = bool(reels_to_start and acc_to_start)
 
             if st.button(f"▶️ Start Ingest ({len(reels_to_start)} Reels)", type="primary", disabled=not can_start, use_container_width=True, key="btn_start_crawler"):
