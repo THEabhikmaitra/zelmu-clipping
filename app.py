@@ -1984,13 +1984,26 @@ def render_upload_stage():
                 log_callback=on_upload_log
             )
             u_progress.progress(1.0)
-            u_status.success(f"✓ Successfully processed {len(results)} clips on YouTube ({mode_label})!")
-            if results:
-                for r in results:
+            successful = [r for r in results if isinstance(r, dict) and not r.get("error") and r.get("video_id")]
+            errors = [r for r in results if isinstance(r, dict) and r.get("error")]
+
+            if successful:
+                u_status.success(f"✓ Successfully processed {len(successful)} clips on YouTube ({mode_label})!")
+                for r in successful:
+                    v_title = r.get("title") or "YouTube Clip"
+                    v_url = r.get("studio_url") or (f"https://studio.youtube.com/video/{r['video_id']}/edit" if r.get("video_id") else "https://studio.youtube.com")
                     sched_note = f" (Scheduled: `{r['publish_at']}`)" if r.get("publish_at") else f" ({r.get('privacy_status', target_privacy).upper()})"
-                    st.markdown(f"- **{r['title']}**{sched_note} &rarr; [Edit in YouTube Studio]({r['studio_url']})")
-                if st.button("Refresh Queue", key="refresh_after_up"):
-                    st.rerun()
+                    st.markdown(f"- **{v_title}**{sched_note} &rarr; [Edit in YouTube Studio]({v_url})")
+
+            if errors:
+                for err_r in errors:
+                    st.warning(f"⚠️ {err_r.get('error')}")
+
+            if not successful and not errors:
+                u_status.info("No clips were processed.")
+
+            if st.button("Refresh Queue", key="refresh_after_up"):
+                st.rerun()
         except Exception as e:
             u_status.error(f"Upload failed: {str(e)}")
 

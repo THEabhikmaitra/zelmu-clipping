@@ -1176,14 +1176,18 @@ def upload_batch_private(
             if target_pub_time:
                 res["publish_at"] = target_pub_time
 
-            if log_callback:
-                if privacy_val == "public" and not target_pub_time:
-                    sched_msg = " (PUBLIC - Instant Publish)"
-                elif target_pub_time:
-                    sched_msg = f" (Scheduled: {target_pub_time})"
-                else:
-                    sched_msg = f" ({privacy_val.title()})"
-                log_callback(f"✓ [{idx+1}/{total_count}] Uploaded: {res['title']}{sched_msg} | {res['speed_mbps']:.1f} Mbps | ID: {res['video_id']}")
+            if res and not res.get("error"):
+                if log_callback:
+                    if privacy_val == "public" and not target_pub_time:
+                        sched_msg = " (PUBLIC - Instant Publish)"
+                    elif target_pub_time:
+                        sched_msg = f" (Scheduled: {target_pub_time})"
+                    else:
+                        sched_msg = f" ({privacy_val.title()})"
+                    res_title = res.get("title", file_name)
+                    res_speed = res.get("speed_mbps", 0.0)
+                    res_id = res.get("video_id", "N/A")
+                    log_callback(f"✓ [{idx+1}/{total_count}] Uploaded: {res_title}{sched_msg} | {res_speed:.1f} Mbps | ID: {res_id}")
 
             return res
         except Exception as e:
@@ -1231,7 +1235,13 @@ def upload_batch_private(
                     )
                     if log_callback:
                         log_callback(f"⚠️ {msg}")
-                    return {"error": msg, "video_id": None}
+                    return {
+                        "error": msg,
+                        "video_id": None,
+                        "title": title_val,
+                        "file_name": file_name,
+                        "studio_url": ""
+                    }
             else:
                 if log_callback:
                     log_callback(f"❌ Error uploading {file_name}: {err_msg}")
