@@ -278,6 +278,24 @@ def scan_and_calculate_account_reels(
     t_type, target_url = normalize_instagram_target(clean_target)
     clean_uname = clean_target.lstrip("@").strip().split("/")[-1] if t_type == "profile" else "custom_batch"
 
+    # Check local discovered cache first (populated by subagent or previous deep discovery)
+    cache_path = Path("insta_discovered_cache.json")
+    if cache_path.exists():
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                c_data = json.load(f)
+                if clean_uname in c_data:
+                    cached_entry = c_data[clean_uname]
+                    c_reels = cached_entry.get("reels", [])
+                    if c_reels:
+                        return {
+                            **cached_entry,
+                            "reels": c_reels[:limit],
+                            "discovered_reels_count": len(c_reels[:limit])
+                        }
+        except Exception as e:
+            print(f"[InstaScraper] Cache read notice: {e}")
+
     reels = []
     total_posts = 0
     follower_count = None

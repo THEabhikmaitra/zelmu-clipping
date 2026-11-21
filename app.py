@@ -2693,6 +2693,19 @@ def render_instagram_clipper():
             )
             st.session_state["insta_calc_data"] = calc_data
 
+    # Pre-load cached discovery from subagent if not yet calculated in current session
+    if "insta_calc_data" not in st.session_state:
+        c_p = Path("insta_discovered_cache.json")
+        if c_p.exists():
+            try:
+                with open(c_p, "r", encoding="utf-8") as f:
+                    c_dict = json.load(f)
+                    req_key = target_uname.strip().lstrip("@") if target_uname.strip() else "gta6.only"
+                    if req_key in c_dict:
+                        st.session_state["insta_calc_data"] = c_dict[req_key]
+            except Exception:
+                pass
+
     # Display Discovery Card or Actionable Error Guidance
     calc_data = st.session_state.get("insta_calc_data")
     if calc_data and calc_data.get("reels"):
