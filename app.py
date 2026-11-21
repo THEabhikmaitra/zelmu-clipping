@@ -56,6 +56,8 @@ from trends_hunter import (
     fetch_google_trends_us,
     search_trend_source_videos,
     get_trend_news_articles,
+    get_trend_video_coverage,
+    check_trend_coverage,
     CATEGORIES
 )
 from trend_daemon import (
@@ -2341,19 +2343,37 @@ def render_trend_hunter():
     scan_ts = st.session_state.get("last_trends_scan_ts", "")
 
     if trends_data:
-        st.markdown(f"### Trends · {scan_ts} ({len(trends_data)} Active)")
+        cov_index = get_trend_video_coverage()
+        for tr in trends_data:
+            tr["_cov"] = check_trend_coverage(tr["query"], cov_index)
 
-        niche_col1, niche_col2 = st.columns([2, 1])
+        done_cnt = sum(1 for t in trends_data if t.get("_cov", {}).get("status") in ["uploaded", "ready"])
+        uploaded_cnt = sum(1 for t in trends_data if t.get("_cov", {}).get("status") == "uploaded")
+        st.markdown(f"### Trends · {scan_ts} ({len(trends_data)} Active · **{done_cnt} Covered [{uploaded_cnt} Published]**)")
+
+        niche_col1, niche_col2, niche_col3 = st.columns([1.5, 1.2, 1.3])
         with niche_col1:
             niche_keyword = st.text_input("Filter Topic:", value="", placeholder="keyword...", key="trend_topic_filter")
         with niche_col2:
+            status_filter = st.selectbox(
+                "Video Status:",
+                ["All Trends", "⚪ Fresh Only (Not Done)", "✅ Done / Ready Only"],
+                index=0,
+                key="trend_status_filter"
+            )
+        with niche_col3:
             video_topic_suffix = st.text_input("Suffix:", value=cat_default_suffix, placeholder="e.g. gameplay", key="trend_yt_suffix")
 
         filtered_trends = trends_data
         if niche_keyword.strip():
             kw_low = niche_keyword.strip().lower()
-            filtered_trends = [t for t in trends_data if kw_low in t["query"].lower()]
+            filtered_trends = [t for t in filtered_trends if kw_low in t["query"].lower()]
             st.caption(f"{len(filtered_trends)} matching '{niche_keyword}'")
+
+        if status_filter == "⚪ Fresh Only (Not Done)":
+            filtered_trends = [t for t in filtered_trends if t.get("_cov", {}).get("status") == "fresh"]
+        elif status_filter == "✅ Done / Ready Only":
+            filtered_trends = [t for t in filtered_trends if t.get("_cov", {}).get("status") in ["uploaded", "ready"]]
 
         # Explicitly sort: recent trends first by default
         if trend_sort == "recency":
@@ -2363,7 +2383,25 @@ def render_trend_hunter():
 
         with st.container(height=650):
             for idx, tr in enumerate(filtered_trends[:30]):
-                with st.expander(f"#{idx+1} {tr['query'].upper()} — ⏱️ {tr['started_time']} ({tr['search_vol_display']})", expanded=(idx < 2)):
+                cov = tr.get("_cov") or check_trend_coverage(tr["query"], cov_index)
+                cov_status = cov.get("status", "fresh")
+                cov_badge = cov.get("badge", "")
+
+                if cov_status == "uploaded":
+                    prefix = f"✅ DONE ({cov['uploaded_count']}) · "
+                elif cov_status == "ready":
+                    prefix = f"📦 READY ({cov['ready_count']}) · "
+                else:
+                    prefix = "⚪ "
+
+                header = f"{prefix}#{idx+1} {tr['query'].upper()} — ⏱️ {tr['started_time']} ({tr['search_vol_display']})"
+
+                with st.expander(header, expanded=(idx < 2 and cov_status == "fresh")):
+                    if cov_status == "uploaded":
+                        st.success(f"✅ **Video Produced & Published ({cov['uploaded_count']} live):** Already covered on YouTube Studio! ({cov['ready_count']} additional in ready queue)")
+                    elif cov_status == "ready":
+                        st.info(f"📦 **Video Produced ({cov['ready_count']} clips ready):** {cov['ready_shorts']} Shorts + {cov['ready_landscapes']} Videos generated in `ready_to_upload/`.")
+
                     c1, c2 = st.columns([2.2, 1.8])
                     with c1:
                         st.markdown(f"**Vol:** `{tr['search_vol_display']}` | **Started:** `{tr['started_time']}` (🟢 Active)")
@@ -2381,7 +2419,10 @@ def render_trend_hunter():
                                 st.caption("No news articles.")
                     with c2:
                         st.markdown("##### Actions")
-                        if st.button(f"🚀 Produce & Publish", key=f"btn_pkg_{idx}", type="primary", use_container_width=True):
+                        action_btn_label = "🔄 Re-Produce & Publish" if cov_status == "uploaded" else ("⚡ Produce More Clips" if cov_status == "ready" else "🚀 Produce & Publish")
+                        action_btn_type = "secondary" if cov_status in ["uploaded", "ready"] else "primary"
+
+                        if st.button(action_btn_label, key=f"btn_pkg_{idx}", type=action_btn_type, use_container_width=True):
                             with st.spinner(f"Producing '{tr['query']}'..."):
                                 def manual_update_status(cur_q, stg, stg_name, detail, pct, s_done, v_done):
                                     set_daemon_progress(

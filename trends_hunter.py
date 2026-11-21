@@ -268,3 +268,100 @@ def search_trend_source_videos(trend_query: str, max_results: int = 3, topic_fil
     except Exception as e:
         print(f"Error searching trend videos: {e}")
     return []
+
+
+def get_trend_video_coverage() -> Dict[str, Any]:
+    """
+    Scans ready_to_upload/ and upload_history.json to index which trending
+    topics already have videos generated or published.
+    """
+    from pathlib import Path
+    ready_dir = Path("ready_to_upload")
+    upload_hist_file = Path("upload_history.json")
+
+    ready_meta = []
+    if ready_dir.exists():
+        for p in ready_dir.glob("*.json"):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                    meta["_stem"] = p.stem
+                    ready_meta.append(meta)
+            except Exception:
+                pass
+
+    history = []
+    if upload_hist_file.exists():
+        try:
+            with open(upload_hist_file, "r", encoding="utf-8") as f:
+                history = json.load(f)
+        except Exception:
+            pass
+
+    return {"ready_meta": ready_meta, "history": history}
+
+
+def check_trend_coverage(query: str, index: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Matches a specific trend query against indexed ready files and upload history."""
+    if index is None:
+        index = get_trend_video_coverage()
+
+    q_low = query.strip().lower()
+    safe_q = "".join(c if c.isalnum() else "_" for c in q_low)[:25].strip("_")
+
+    ready_meta = index.get("ready_meta", [])
+    history = index.get("history", [])
+
+    matched_ready = []
+    ready_shorts = 0
+    ready_landscapes = 0
+
+    for m in ready_meta:
+        stem = m.get("_stem", "").lower()
+        tags = [t.lower() for t in m.get("tags", [])]
+        title = m.get("title", "").lower()
+        desc = m.get("description", "").lower()
+
+        if safe_q in stem or q_low in tags or q_low in title or f"#{safe_q}" in desc:
+            matched_ready.append(m)
+            if stem.startswith("short_"):
+                ready_shorts += 1
+            elif stem.startswith("video_"):
+                ready_landscapes += 1
+
+    matched_uploaded = []
+    for h in history:
+        tags = [t.lower() for t in h.get("tags", [])]
+        title = h.get("title", "").lower()
+        stem = h.get("file_stem", "").lower()
+        if safe_q in stem or q_low in tags or q_low in title:
+            matched_uploaded.append(h)
+
+    up_cnt = len(matched_uploaded)
+    rd_cnt = len(matched_ready)
+
+    if up_cnt > 0:
+        status = "uploaded"
+        badge = f"✅ DONE ({up_cnt} Published)"
+        tag = "✅ DONE"
+    elif rd_cnt > 0:
+        status = "ready"
+        badge = f"📦 READY ({rd_cnt} in Queue)"
+        tag = "📦 READY"
+    else:
+        status = "fresh"
+        badge = "⚪ FRESH"
+        tag = ""
+
+    return {
+        "query": query,
+        "status": status,
+        "badge": badge,
+        "tag": tag,
+        "ready_count": rd_cnt,
+        "ready_shorts": ready_shorts,
+        "ready_landscapes": ready_landscapes,
+        "uploaded_count": up_cnt,
+        "uploaded_videos": matched_uploaded
+    }
+
