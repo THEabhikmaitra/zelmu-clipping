@@ -287,3 +287,198 @@ Return ONLY JSON:
             "description": f"🔥 Final verdict on {c_name}.\n\nGet started: {sponsor_link}\n\n{hashtags}"
         }
     ]
+
+
+CONTENTREWARDS_CACHE_FILE = Path("contentrewards_cache.json")
+
+
+def parse_budget_str_to_float(budget_str: str) -> float:
+    """Parses '$10K', '$500', '$1.5M' to float."""
+    if not budget_str:
+        return 500.0
+    clean = budget_str.replace("$", "").strip().upper()
+    try:
+        if clean.endswith("K"):
+            return float(clean[:-1]) * 1000.0
+        elif clean.endswith("M"):
+            return float(clean[:-1]) * 1000000.0
+        return float(clean)
+    except Exception:
+        return 500.0
+
+
+def fetch_contentrewards_campaigns(limit: int = 60, force_refresh: bool = False) -> List[Dict[str, Any]]:
+    """
+    Scrapes all live clipping campaigns directly from ContentRewards.com (/c/discover).
+    Returns list of active campaigns with title, provider, CPM, budget, and platforms.
+    """
+    import urllib.request
+
+    if not force_refresh and CONTENTREWARDS_CACHE_FILE.exists():
+        try:
+            with open(CONTENTREWARDS_CACHE_FILE, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+                if time.time() - cached.get("cached_at", 0) < 3600:
+                    return cached.get("campaigns", [])[:limit]
+        except Exception:
+            pass
+
+    url = "https://contentrewards.com/c/discover"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        html = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", errors="ignore")
+    except Exception as e:
+        push_unified_log("CAMPAIGN", f"⚠️ Error fetching ContentRewards marketplace: {e}")
+        return []
+
+    pattern = re.compile(r'<a\s+[^>]*href=["\'](/c/[^"\']+)["\'][^>]*>(.*?)</a>', re.DOTALL)
+    matches = pattern.findall(html)
+
+    campaigns = []
+    seen = set()
+
+    for href, body in matches:
+        if href in ["/c/discover", "/c/login", "/c/signup"]:
+            continue
+        if href in seen:
+            continue
+        seen.add(href)
+
+        clean_text = " ".join(re.sub(r'<[^>]+>', ' ', body).split())
+        if "$/1K" in clean_text or "/1K" in clean_text or "$" in clean_text:
+            title_match = re.search(r'truncate[^>]*>([^<]+)</span>', body)
+            title = title_match.group(1).strip() if title_match else clean_text[:40]
+
+            cpm_match = re.search(r'\$([0-9]+(?:\.[0-9]+)?)/1K', body)
+            cpm = float(cpm_match.group(1)) if cpm_match else 1.0
+
+            budget_match = re.search(r'\$([0-9]+[KMkm]?)\s*/\s*\$([0-9]+[KMkm]?)', clean_text)
+            spent = budget_match.group(1) if budget_match else ""
+            total_budget = budget_match.group(2) if budget_match else ""
+
+            platforms = []
+            if "tiktok" in body.lower():
+                platforms.append("TikTok")
+            if "youtube" in body.lower():
+                platforms.append("YouTube")
+            if "instagram" in body.lower():
+                platforms.append("Instagram")
+            if "aria-label=\"x\"" in body.lower() or "arialabel=\"x\"" in body.lower() or "aria-label='x'" in body.lower():
+                platforms.append("X")
+
+            c_id = href.split("/")[-1].split("?")[0]
+            budget_val = parse_budget_str_to_float(f"${total_budget}") if total_budget else 500.0
+
+            campaigns.append({
+                "id": c_id,
+                "name": title,
+                "url": f"https://contentrewards.com{href}",
+                "cpm_rate": cpm,
+                "budget_spent": f"${spent}" if spent else "$0",
+                "budget_total": f"${total_budget}" if total_budget else "Open",
+                "revenue_goal": budget_val,
+                "target_views": int((budget_val / max(0.1, cpm)) * 1000),
+                "platforms": platforms or ["YouTube", "TikTok", "Instagram"],
+            })
+            if len(campaigns) >= limit:
+                break
+
+    try:
+        with open(CONTENTREWARDS_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"cached_at": time.time(), "campaigns": campaigns}, f, indent=2)
+    except Exception:
+        pass
+
+    push_unified_log("CAMPAIGN", f"Pushed {len(campaigns)} live campaigns from ContentRewards.com marketplace.")
+    return campaigns
+
+
+def import_contentrewards_campaign(campaign_url: str) -> Dict[str, Any]:
+    """
+    Pulls full campaign details from a ContentRewards campaign page:
+    - Schema.org metadata (name, provider, description brief)
+    - CPM payout rate
+    - Mandatory hashtags & rules
+    - Source video footage assets (YouTube URL)
+    - Adopts campaign into campaigns_db.json and sets as active.
+    """
+    import urllib.request
+
+    if not campaign_url.startswith("http"):
+        campaign_url = f"https://contentrewards.com/c/campaigns/{campaign_url}"
+
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    req = urllib.request.Request(campaign_url, headers=headers)
+    html = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", errors="ignore")
+
+    service_name = ""
+    service_desc = ""
+    provider_name = ""
+    json_ld_blocks = re.findall(r'<script[^>]*type=[\'"]application/ld\+json[\'"][^>]*>(.*?)</script>', html, re.DOTALL)
+    for block in json_ld_blocks:
+        try:
+            data = json.loads(block)
+            graph = data.get("@graph", [])
+            for item in graph:
+                if item.get("@type") == "Service":
+                    service_name = item.get("name", "")
+                    service_desc = item.get("description", "")
+                    provider_name = item.get("provider", {}).get("name", "")
+        except Exception:
+            pass
+
+    cpm_m = re.search(r'\$([0-9]+(?:\.[0-9]+)?)\s*(?:/|per)\s*1K', html, re.IGNORECASE)
+    cpm = float(cpm_m.group(1)) if cpm_m else 1.0
+
+    budget_m = re.search(r'\$([0-9]+[KMkm]?)\s*/\s*\$([0-9]+[KMkm]?)', html)
+    total_budget_str = budget_m.group(2) if budget_m else ""
+    revenue_goal = parse_budget_str_to_float(f"${total_budget_str}") if total_budget_str else 500.0
+
+    yt_links = re.findall(r'(https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)[a-zA-Z0-9_-]{11})', html)
+    source_url = yt_links[0] if yt_links else ""
+
+    tags = re.findall(r'#([a-zA-Z0-9_]{3,30})', html)
+    filtered_tags = []
+    for t in tags:
+        t_lower = t.lower()
+        if re.match(r'^[0-9a-f]{6}$', t_lower) or re.match(r'^[0-9a-f]{8}$', t_lower):
+            continue
+        if t_lower in ["service", "breadcrumb", "website", "main", "ffffff", "151515", "0f0f0f", "252525", "171717", "161616", "f0f0f0"]:
+            continue
+        filtered_tags.append(f"#{t}")
+
+    unique_tags = list(dict.fromkeys(filtered_tags))[:6]
+    mandatory_tags = " ".join(unique_tags) if unique_tags else "#Shorts #Trending"
+
+    c_id = campaign_url.split("/")[-1].split("?")[0]
+    name = service_name or provider_name or "ContentRewards Campaign"
+    target_views = int((revenue_goal / max(0.1, cpm)) * 1000)
+
+    audience = "Gamers & Esports" if any(w in (name + service_desc).lower() for w in ["gta", "game", "gaming", "play"]) else (
+        "Tech & AI Enthusiasts" if any(w in (name + service_desc).lower() for w in ["tech", "ai", "crypto", "app"]) else "General Viral"
+    )
+
+    campaign_data = {
+        "id": c_id,
+        "name": name,
+        "provider": provider_name,
+        "cpm_rate": cpm,
+        "revenue_goal": revenue_goal,
+        "target_views": target_views,
+        "target_country": "United States (US)",
+        "target_audience": audience,
+        "description_brief": service_desc or f"Create viral clips and highlights for {name} strictly adhering to sponsor brief.",
+        "mandatory_hashtags": mandatory_tags,
+        "sponsor_link": campaign_url,
+        "source_footage_url": source_url,
+        "status": "active",
+        "imported_from": "contentrewards.com",
+        "updated_at": time.time()
+    }
+
+    save_campaign(campaign_data)
+    set_active_campaign(c_id)
+    push_unified_log("CAMPAIGN", f"Successfully adopted campaign '{name}' from ContentRewards (Goal: ${revenue_goal:,.0f}, CPM: ${cpm:.2f})")
+    return campaign_data
+

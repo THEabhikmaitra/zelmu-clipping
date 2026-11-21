@@ -90,7 +90,9 @@ from campaigns_manager import (
     get_active_campaign,
     set_active_campaign,
     calculate_campaign_roi,
-    generate_campaign_scripts
+    generate_campaign_scripts,
+    fetch_contentrewards_campaigns,
+    import_contentrewards_campaign
 )
 from uploader import (
     upload_batch_private,
@@ -2805,7 +2807,56 @@ def render_instagram_clipper():
 
 def render_campaign_clipper():
     st.markdown("<div class='section-title'>STAGE 2: CONTENTREWARDS CAMPAIGN CLIPPER</div>", unsafe_allow_html=True)
-    st.caption("Campaign-driven clipping engine: Auto-adapts script hooks and descriptions to the campaign brief, target audience, and target country, with live ROI & revenue tracking.")
+    st.caption("Auto-pull live campaigns from ContentRewards.com marketplace, adopt campaign goals & KPIs, and auto-produce brand-compliant Shorts.")
+
+    # 1. ContentRewards Live Marketplace Pull Bar
+    st.markdown("<div class='section-title'>🌐 CONTENTREWARDS LIVE MARKETPLACE (LIVE PULL)</div>", unsafe_allow_html=True)
+
+    col_pull1, col_pull2 = st.columns([1.3, 1.7], gap="medium")
+    with col_pull1:
+        if st.button("🔄 Pull Live Campaigns from ContentRewards.com", type="primary", use_container_width=True, key="btn_pull_cr"):
+            with st.spinner("Connecting to ContentRewards.com/c/discover & extracting active campaigns..."):
+                pulled = fetch_contentrewards_campaigns(limit=50, force_refresh=True)
+                if pulled:
+                    st.success(f"✓ Successfully pulled {len(pulled)} live campaigns from ContentRewards.com!")
+                    time.sleep(0.5)
+                    st.rerun()
+                else:
+                    st.error("Failed to fetch campaigns. Please verify network connectivity.")
+
+    pulled_campaigns = fetch_contentrewards_campaigns(limit=50, force_refresh=False)
+
+    with col_pull2:
+        if pulled_campaigns:
+            st.caption(f"✓ **{len(pulled_campaigns)} Live Campaigns Discovered** on ContentRewards.com. Select any campaign below to adopt its goals, payout rate & KPIs.")
+        else:
+            st.caption("Click 'Pull Live Campaigns' to discover active payout campaigns from ContentRewards.com.")
+
+    # Campaign Selector / Adoption Row
+    if pulled_campaigns:
+        camp_display_map = {
+            f"{c['name']} | ${c['cpm_rate']:.2f}/1K | Budget: {c['budget_total']} | {', '.join(c.get('platforms', ['Shorts']))}": c
+            for c in pulled_campaigns
+        }
+        selected_display = st.selectbox(
+            "Select Live Campaign from ContentRewards Marketplace",
+            list(camp_display_map.keys()),
+            key="sel_live_cr_camp"
+        )
+        selected_c_item = camp_display_map[selected_display]
+
+        col_adopt1, col_adopt2 = st.columns([1.2, 1.8])
+        with col_adopt1:
+            if st.button(f"⚡ Pull & Adopt '{selected_c_item['name'][:22]}' Goals", type="primary", use_container_width=True, key=f"btn_adopt_{selected_c_item['id']}"):
+                with st.spinner(f"Pulling brief, guidelines & assets for '{selected_c_item['name']}'..."):
+                    adopted = import_contentrewards_campaign(selected_c_item["url"])
+                    st.success(f"✓ Adopted '{adopted['name']}'! CPM: ${adopted['cpm_rate']:.2f}, Goal: ${adopted['revenue_goal']:,.0f}")
+                    time.sleep(0.5)
+                    st.rerun()
+        with col_adopt2:
+            st.markdown(f"🔗 [Inspect on ContentRewards.com ↗]({selected_c_item['url']}) &bull; **Platforms:** `{', '.join(selected_c_item.get('platforms', []))}` &bull; **Spend:** `{selected_c_item.get('budget_spent', '$0')} / {selected_c_item.get('budget_total', '$0')}`")
+
+    st.divider()
 
     camp_db = load_campaigns_db()
     campaigns = camp_db.get("campaigns", {})
@@ -2818,12 +2869,12 @@ def render_campaign_clipper():
         camp_options = {c["name"]: cid for cid, c in campaigns.items()} if campaigns else {}
         if camp_options:
             cur_active_name = active_camp.get("name") if active_camp else list(camp_options.keys())[0]
-            selected_camp_name = st.selectbox("Select Active ContentRewards Campaign", list(camp_options.keys()), index=list(camp_options.keys()).index(cur_active_name) if cur_active_name in camp_options else 0, key="sel_active_campaign")
+            selected_camp_name = st.selectbox("Select Active Working Campaign", list(camp_options.keys()), index=list(camp_options.keys()).index(cur_active_name) if cur_active_name in camp_options else 0, key="sel_active_campaign")
             if selected_camp_name and camp_options[selected_camp_name] != camp_db.get("active_campaign_id"):
                 set_active_campaign(camp_options[selected_camp_name])
                 st.rerun()
 
-        with st.expander("➕ Create New ContentRewards Campaign Profile", expanded=(not camp_options)):
+        with st.expander("➕ Or Create Custom / Offline Campaign Profile", expanded=(not camp_options)):
             with st.form("form_new_campaign"):
                 new_c_name = st.text_input("Campaign Name", placeholder="e.g. DraftKings Podcast Clipper")
                 n_col1, n_col2 = st.columns(2)
@@ -2859,21 +2910,22 @@ def render_campaign_clipper():
     with top_c2:
         if active_camp:
             st.markdown("<div class='section-title'>CAMPAIGN KPI GOALS</div>", unsafe_allow_html=True)
-            cpm_r = float(active_camp.get("cpm_rate", 3.5))
+            cpm_r = float(active_camp.get("cpm_rate", 1.0))
             rev_g = float(active_camp.get("revenue_goal", 500.0))
             t_views = int((rev_g / max(0.1, cpm_r)) * 1000)
 
             st.metric("Revenue Cap / Goal", f"${rev_g:,.2f}", delta=f"${cpm_r:.2f} CPM")
-            st.metric("Target Views Needed", f"{t_views:,} views")
-            st.caption(f"**Target Geo:** {active_camp.get('target_country', 'US')} | **Audience:** {active_camp.get('target_audience', 'Gamers')}")
+            st.metric("Target Views Needed (KPI)", f"{t_views:,} views")
+            st.caption(f"**Brief:** {active_camp.get('description_brief', 'N/A')[:100]}...")
+            st.caption(f"**Hashtags:** `{active_camp.get('mandatory_hashtags', '#Shorts')}`")
 
-            if st.button("🗑️ Delete This Campaign", type="secondary", use_container_width=True, key=f"btn_del_camp_{active_camp.get('id')}"):
+            if st.button("🗑️ Remove Campaign", type="secondary", use_container_width=True, key=f"btn_del_camp_{active_camp.get('id')}"):
                 delete_campaign(active_camp.get("id"))
-                st.warning("Campaign deleted.")
+                st.warning("Campaign removed.")
                 st.rerun()
 
     if not active_camp:
-        st.info("No active campaign configured. Create a campaign profile above to begin campaign-driven clipping.")
+        st.info("No active campaign configured. Select a campaign from the live marketplace above to adopt its goals.")
         return
 
     # Campaign Clipping Engine
