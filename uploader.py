@@ -925,6 +925,21 @@ def upload_single_video(
     except Exception:
         pass
 
+    # Log into upload history for closed-loop learning & clean old workspaces
+    try:
+        from learning_engine import record_uploaded_video, cleanup_stale_workspaces
+        record_uploaded_video(
+            video_id=video_id,
+            title=full_title,
+            file_stem=file_path.stem,
+            publish_at=publish_at,
+            privacy_mode=privacy_status,
+            tags=tags
+        )
+        cleanup_stale_workspaces(max_age_days=7)
+    except Exception:
+        pass
+
     return {
         "video_id": video_id,
         "title": full_title,

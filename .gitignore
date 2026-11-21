@@ -44,3 +44,10 @@ Thumbs.db
 
 # Streamlit Local Runtime
 .streamlit/secrets.toml
+
+# Runtime daemon state & progress
+*_state.json
+*_progress.json
+*_config.json
+learning_db.json
+upload_history.json

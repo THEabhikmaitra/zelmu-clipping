@@ -111,7 +111,8 @@ from livestream_buffer import (
     start_livestream_daemon,
     stop_livestream_daemon,
     get_livestream_logs,
-    get_livestream_progress
+    get_livestream_progress,
+    check_if_stream_live
 )
 from arbiter import (
     pause_all_daemons,
@@ -119,6 +120,22 @@ from arbiter import (
     is_system_paused,
     get_arbiter_status,
     get_unified_logs
+)
+from learning_engine import (
+    load_learning_db,
+    save_learning_db,
+    load_upload_history,
+    record_uploaded_video,
+    sync_youtube_performance,
+    get_learned_seo_boost,
+    audit_quality_and_seo,
+    quick_fix_seo,
+    cleanup_stale_workspaces
+)
+from portal_stages import (
+    render_quality_seo_stage,
+    render_analytics_stage,
+    render_learning_stage
 )
 
 # Ensure base directories exist
@@ -199,10 +216,11 @@ st.markdown("""
     }
 
     /* Instant Top Tabs (beside ZELMU logo in fixed top navbar) */
+    div[data-testid="stTabs"]:first-child > [role="tablist"],
     div[data-testid="stTabs"] [role="tablist"] {
         position: fixed !important;
         top: 8px !important;
-        left: 175px !important;
+        left: 170px !important;
         z-index: 1004 !important;
         background: #121215 !important;
         border: 1px solid #27272a !important;
@@ -219,8 +237,8 @@ st.markdown("""
     }
     div[data-testid="stTabs"] [role="tab"] {
         height: 26px !important;
-        padding: 0 12px !important;
-        font-size: 0.74rem !important;
+        padding: 0 8px !important;
+        font-size: 0.72rem !important;
         font-weight: 500 !important;
         color: #71717a !important;
         border: none !important;
@@ -233,6 +251,7 @@ st.markdown("""
         transition: all 0.15s ease !important;
         outline: none !important;
         box-shadow: none !important;
+        white-space: nowrap !important;
     }
     div[data-testid="stTabs"] [role="tab"]:hover {
         color: #f4f4f5 !important;
@@ -247,6 +266,26 @@ st.markdown("""
     div[data-testid="stTabs"] .react-aria-SelectionIndicator,
     div[data-testid="stTabs"] [role="tablist"] div[role="presentation"] {
         display: none !important;
+    }
+
+    /* Nested Sub-Tabs inside content stay in natural flow */
+    div[data-testid="stTabs"] div[data-testid="stTabs"] [role="tablist"] {
+        position: static !important;
+        top: auto !important;
+        left: auto !important;
+        z-index: 10 !important;
+        width: 100% !important;
+        margin: 4px 0 12px 0 !important;
+        background: #18181b !important;
+        border: 1px solid #27272a !important;
+        border-radius: 6px !important;
+        height: 28px !important;
+        display: flex !important;
+    }
+    div[data-testid="stTabs"] div[data-testid="stTabs"] [role="tab"] {
+        height: 22px !important;
+        padding: 0 10px !important;
+        font-size: 0.70rem !important;
     }
 
     /* Top Nav Gear Settings Popover (Strictly 32x32px at top-right) */
@@ -764,16 +803,8 @@ def render_labor_card(
     placeholder.markdown(html, unsafe_allow_html=True)
 
 # Instant Client-Side Tabs (Positioned inside Top Fixed Navbar beside logo)
-tab_mc, tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🎛️ Mission",
-    "Produce",
-    "Upload",
-    "🤖 VODs",
-    "🔴 Live",
-    "🎯 Trends"
-])
 
-with tab_mc:
+def render_mission_control():
     # 1. Master System Control Row
     st.markdown("<div class='section-title'>MISSION CONTROL</div>", unsafe_allow_html=True)
     st.caption("Hardware mutex & fleet status.")
@@ -907,7 +938,8 @@ with tab_mc:
 
         render_mc_unified_log_box()
 
-with tab1:
+
+def render_manual_clipper():
     col_l, col_r = st.columns([1.6, 1])
 
     with col_l:
@@ -1545,7 +1577,8 @@ def get_client_id_info():
     except Exception:
         return "Invalid JSON"
 
-with tab2:
+
+def render_upload_stage():
     ready_videos = sorted(list(READY_DIR.glob("*.mp4")))
     yt_connected = is_authenticated()
     curr_client_id = get_client_id_info()
@@ -1957,8 +1990,13 @@ with tab2:
                 st.rerun()
     else:
         st.caption("No upload history recorded yet.")
+    st.markdown("<div class='section-title'>STORAGE MAINTENANCE</div>", unsafe_allow_html=True)
+    if st.button("🧹 Purge Stale Workspace Temp Dirs (>7d)", type="secondary", key="btn_clean_ws_storage"):
+        cleaned = cleanup_stale_workspaces()
+        st.success(f"✓ Cleaned {cleaned} stale intermediate folders.")
 
-with tab3:
+
+def render_vod_watcher():
     st.markdown("<div class='section-title'>VOD CLIPPER</div>", unsafe_allow_html=True)
     watcher_cfg = load_watcher_config()
     running = is_watcher_running()
@@ -2076,7 +2114,8 @@ with tab3:
 
     render_autopilot_live_telemetry()
 
-with tab4:
+
+def render_live_buffer():
     st.markdown("<div class='section-title'>LIVE CLIPPER</div>", unsafe_allow_html=True)
     live_cfg = load_livestream_config()
     live_running = is_livestream_running()
@@ -2195,177 +2234,276 @@ with tab4:
 
     render_livestream_live_telemetry()
 
-with tab5:
-    col_list, col_telemetry = st.columns([1.35, 1.0], gap="large")
 
-    with col_list:
-        st.markdown("<div class='section-title'>TREND HUNTER</div>", unsafe_allow_html=True)
-        st.caption("Google Trends (US 4h) → 6 Shorts + 2 Landscape (Public).")
+def render_trend_hunter():
+    st.markdown("<div class='section-title'>TREND HUNTER</div>", unsafe_allow_html=True)
+    st.caption("Google Trends (US 4h) → 6 Shorts + 2 Landscape (Public).")
 
-        # Trend Scanner Parameters
-        st.markdown("<div class='section-title'>SCANNER</div>", unsafe_allow_html=True)
-        p1, p2, p3, p4, p5 = st.columns([1, 1, 1.1, 1.4, 1.3])
-        with p1:
-            trend_geo = st.selectbox("Geo", ["US", "GB", "CA", "AU"], index=0, key="trend_geo")
-        with p2:
-            trend_hours = st.selectbox("Window", [4, 24, 48], index=0, format_func=lambda x: f"Past {x}h", key="trend_hours")
-        with p3:
-            trend_sort = st.selectbox("Sort", ["recency", "search-volume"], index=0, format_func=lambda x: "Recency" if x == "recency" else "Volume", key="trend_sort")
-        with p4:
-            cat_keys = list(CATEGORIES.keys())
-            sel_cat_key = st.selectbox("Category", cat_keys, index=0, format_func=lambda k: CATEGORIES[k]["label"], key="trend_cat")
-            sel_cat_id = CATEGORIES[sel_cat_key]["cat_id"]
-            cat_default_suffix = CATEGORIES[sel_cat_key]["default_suffix"]
-        with p5:
-            st.write("")
-            st.write("")
-            btn_scan_trends = st.button("🔥 Scan", use_container_width=True, type="primary")
+    # Trend Scanner Parameters
+    st.markdown("<div class='section-title'>SCANNER</div>", unsafe_allow_html=True)
+    p1, p2, p3, p4, p5 = st.columns([1, 1, 1.1, 1.4, 1.3])
+    with p1:
+        trend_geo = st.selectbox("Geo", ["US", "GB", "CA", "AU"], index=0, key="trend_geo")
+    with p2:
+        trend_hours = st.selectbox("Window", [4, 24, 48], index=0, format_func=lambda x: f"Past {x}h", key="trend_hours")
+    with p3:
+        trend_sort = st.selectbox("Sort", ["recency", "search-volume"], index=0, format_func=lambda x: "Recency" if x == "recency" else "Volume", key="trend_sort")
+    with p4:
+        cat_keys = list(CATEGORIES.keys())
+        sel_cat_key = st.selectbox("Category", cat_keys, index=0, format_func=lambda k: CATEGORIES[k]["label"], key="trend_cat")
+        sel_cat_id = CATEGORIES[sel_cat_key]["cat_id"]
+        cat_default_suffix = CATEGORIES[sel_cat_key]["default_suffix"]
+    with p5:
+        st.write("")
+        st.write("")
+        btn_scan_trends = st.button("🔥 Scan", use_container_width=True, type="primary")
 
-        if btn_scan_trends or "cached_us_trends" not in st.session_state:
-            with st.spinner(f"Scraping trends ({CATEGORIES[sel_cat_key]['label']}, {trend_geo}, {trend_hours}h)..."):
-                scanned_trends = fetch_google_trends_us(geo=trend_geo, hours=trend_hours, sort=trend_sort, category_id=sel_cat_id)
-                st.session_state["cached_us_trends"] = scanned_trends
-                st.session_state["last_trends_scan_ts"] = datetime.datetime.now().strftime("%m/%d/%y, %I:%M %p")
+    if btn_scan_trends or "cached_us_trends" not in st.session_state:
+        with st.spinner(f"Scraping trends ({CATEGORIES[sel_cat_key]['label']}, {trend_geo}, {trend_hours}h)..."):
+            scanned_trends = fetch_google_trends_us(geo=trend_geo, hours=trend_hours, sort=trend_sort, category_id=sel_cat_id)
+            st.session_state["cached_us_trends"] = scanned_trends
+            st.session_state["last_trends_scan_ts"] = datetime.datetime.now().strftime("%m/%d/%y, %I:%M %p")
 
-        trends_data = st.session_state.get("cached_us_trends", [])
-        scan_ts = st.session_state.get("last_trends_scan_ts", "")
+    trends_data = st.session_state.get("cached_us_trends", [])
+    scan_ts = st.session_state.get("last_trends_scan_ts", "")
 
-        if trends_data:
-            st.markdown(f"### Trends · {scan_ts} ({len(trends_data)} Active)")
+    if trends_data:
+        st.markdown(f"### Trends · {scan_ts} ({len(trends_data)} Active)")
 
-            niche_col1, niche_col2 = st.columns([2, 1])
-            with niche_col1:
-                niche_keyword = st.text_input("Filter Topic:", value="", placeholder="keyword...", key="trend_topic_filter")
-            with niche_col2:
-                video_topic_suffix = st.text_input("Suffix:", value=cat_default_suffix, placeholder="e.g. gameplay", key="trend_yt_suffix")
+        niche_col1, niche_col2 = st.columns([2, 1])
+        with niche_col1:
+            niche_keyword = st.text_input("Filter Topic:", value="", placeholder="keyword...", key="trend_topic_filter")
+        with niche_col2:
+            video_topic_suffix = st.text_input("Suffix:", value=cat_default_suffix, placeholder="e.g. gameplay", key="trend_yt_suffix")
 
-            filtered_trends = trends_data
-            if niche_keyword.strip():
-                kw_low = niche_keyword.strip().lower()
-                filtered_trends = [t for t in trends_data if kw_low in t["query"].lower()]
-                st.caption(f"{len(filtered_trends)} matching '{niche_keyword}'")
+        filtered_trends = trends_data
+        if niche_keyword.strip():
+            kw_low = niche_keyword.strip().lower()
+            filtered_trends = [t for t in trends_data if kw_low in t["query"].lower()]
+            st.caption(f"{len(filtered_trends)} matching '{niche_keyword}'")
 
-            with st.container(height=650):
-                for idx, tr in enumerate(filtered_trends[:30]):
-                    with st.expander(f"#{idx+1} {tr['query'].upper()} — {tr['search_vol_display']} ({tr['started_time']})", expanded=(idx < 2)):
-                        c1, c2 = st.columns([2.2, 1.8])
-                        with c1:
-                            st.markdown(f"**Vol:** `{tr['search_vol_display']}` | **Started:** `{tr['started_time']}` (🟢 Active)")
-                            st.markdown(f"**Breakdown:** *{tr['breakdown_display']}*")
-                            st.markdown(f"[🔗 Search]({tr['search_link']}) | [📈 Explore]({tr['explore_link']})")
+        with st.container(height=650):
+            for idx, tr in enumerate(filtered_trends[:30]):
+                with st.expander(f"#{idx+1} {tr['query'].upper()} — {tr['search_vol_display']} ({tr['started_time']})", expanded=(idx < 2)):
+                    c1, c2 = st.columns([2.2, 1.8])
+                    with c1:
+                        st.markdown(f"**Vol:** `{tr['search_vol_display']}` | **Started:** `{tr['started_time']}` (🟢 Active)")
+                        st.markdown(f"**Breakdown:** *{tr['breakdown_display']}*")
+                        st.markdown(f"[🔗 Search]({tr['search_link']}) | [📈 Explore]({tr['explore_link']})")
 
-                            if st.button("📰 Load News", key=f"btn_news_{idx}"):
-                                news_items = get_trend_news_articles(tr['query'], max_articles=3)
-                                tr["news_articles"] = news_items
-                                if news_items:
-                                    st.write("**Top News:**")
-                                    for ni in news_items:
-                                        st.markdown(f"- [{ni['title']}]({ni['url']}) *({ni['source']})*")
-                                else:
-                                    st.caption("No news articles.")
-                        with c2:
-                            st.markdown("##### Actions")
-                            if st.button(f"🚀 Produce & Publish", key=f"btn_pkg_{idx}", type="primary", use_container_width=True):
-                                with st.spinner(f"Producing '{tr['query']}'..."):
-                                    def manual_update_status(cur_q, stg, stg_name, detail, pct, s_done, v_done):
-                                        set_daemon_progress(
-                                            active=True,
-                                            current_trend=cur_q,
-                                            stage=stg,
-                                            total_stages=5,
-                                            stage_name=stg_name,
-                                            step_detail=detail,
-                                            next_step="Instant Public Publishing" if stg < 5 else "Completed",
-                                            percent=pct,
-                                            shorts_done=s_done,
-                                            videos_done=v_done
-                                        )
-                                    pkg_res = produce_trend_package(
-                                        tr,
-                                        auto_upload=is_authenticated(),
-                                        progress_callback=lambda m: push_daemon_log(f"[{tr['query']}] {m}"),
-                                        status_callback=manual_update_status
+                        if st.button("📰 Load News", key=f"btn_news_{idx}"):
+                            news_items = get_trend_news_articles(tr['query'], max_articles=3)
+                            tr["news_articles"] = news_items
+                            if news_items:
+                                st.write("**Top News:**")
+                                for ni in news_items:
+                                    st.markdown(f"- [{ni['title']}]({ni['url']}) *({ni['source']})*")
+                            else:
+                                st.caption("No news articles.")
+                    with c2:
+                        st.markdown("##### Actions")
+                        if st.button(f"🚀 Produce & Publish", key=f"btn_pkg_{idx}", type="primary", use_container_width=True):
+                            with st.spinner(f"Producing '{tr['query']}'..."):
+                                def manual_update_status(cur_q, stg, stg_name, detail, pct, s_done, v_done):
+                                    set_daemon_progress(
+                                        active=True,
+                                        current_trend=cur_q,
+                                        stage=stg,
+                                        total_stages=5,
+                                        stage_name=stg_name,
+                                        step_detail=detail,
+                                        next_step="Instant Public Publishing" if stg < 5 else "Completed",
+                                        percent=pct,
+                                        shorts_done=s_done,
+                                        videos_done=v_done
                                     )
-                                    manual_update_status(tr['query'], 5, "Completed", f"Published {pkg_res['total_rendered']} assets", 100, len(pkg_res.get('shorts', [])), len(pkg_res.get('landscapes', [])))
-                                    st.success(f"✓ Published {pkg_res['total_rendered']} assets (Public)!")
+                                pkg_res = produce_trend_package(
+                                    tr,
+                                    auto_upload=is_authenticated(),
+                                    progress_callback=lambda m: push_daemon_log(f"[{tr['query']}] {m}"),
+                                    status_callback=manual_update_status
+                                )
+                                manual_update_status(tr['query'], 5, "Completed", f"Published {pkg_res['total_rendered']} assets", 100, len(pkg_res.get('shorts', [])), len(pkg_res.get('landscapes', [])))
+                                st.success(f"✓ Published {pkg_res['total_rendered']} assets (Public)!")
+                                st.rerun()
+
+                        if st.button(f"⚡ Open in Produce", key=f"btn_clip_{idx}", use_container_width=True):
+                            with st.spinner(f"Searching YouTube..."):
+                                vids = search_trend_source_videos(tr['query'], max_results=3, topic_filter=video_topic_suffix)
+                                if vids:
+                                    top_vid = vids[0]
+                                    st.session_state["txt_raw_url"] = top_vid["url"]
+                                    st.success(f"Selected: {top_vid['title']}! Switched.")
                                     st.rerun()
+                                else:
+                                    st.warning("No YouTube videos found.")
+    else:
+        st.info("No trends. Click 'Scan' above.")
 
-                            if st.button(f"⚡ Open in Produce", key=f"btn_clip_{idx}", use_container_width=True):
-                                with st.spinner(f"Searching YouTube..."):
-                                    vids = search_trend_source_videos(tr['query'], max_results=3, topic_filter=video_topic_suffix)
-                                    if vids:
-                                        top_vid = vids[0]
-                                        st.session_state["txt_raw_url"] = top_vid["url"]
-                                        st.success(f"Selected: {top_vid['title']}! Switched.")
-                                        st.rerun()
-                                    else:
-                                        st.warning("No YouTube videos found.")
+
+def render_trend_factory():
+    st.markdown("<div class='section-title'>DAEMON & TELEMETRY</div>", unsafe_allow_html=True)
+
+    d_cfg = load_daemon_config()
+    d_running = is_trend_daemon_running()
+
+    if d_running:
+        st.success("🟢 **Active:** 24/7 US Trends → Public.")
+        if st.button("⏹️ Stop", use_container_width=True, type="secondary", key="btn_stop_trend_daemon"):
+            stop_trend_daemon()
+            st.rerun()
+    else:
+        st.warning("⚪ **Idle:** Daemon stopped.")
+        if st.button("▶️ Start Daemon", use_container_width=True, type="primary", key="btn_start_trend_daemon"):
+            start_trend_daemon()
+            st.rerun()
+
+    with st.expander("⚙️ Daemon Config", expanded=False):
+        d_poll = st.number_input("Poll (sec)", min_value=60, max_value=3600, value=int(d_cfg.get("poll_interval_sec", 300)), step=60, key="cfg_daemon_poll")
+        d_autoup = st.checkbox("Publish Public", value=bool(d_cfg.get("auto_upload", True)), key="cfg_daemon_autoup")
+        if st.button("💾 Save", key="btn_save_daemon_cfg", use_container_width=True):
+            d_cfg["poll_interval_sec"] = d_poll
+            d_cfg["auto_upload"] = d_autoup
+            save_daemon_config(d_cfg)
+            st.success("Saved")
+
+    @st.fragment(run_every="3s")
+    def render_trend_daemon_telemetry_box():
+        t_prog = get_daemon_progress()
+        is_t_run = is_trend_daemon_running()
+        t_pct = int(t_prog.get("percent", 0))
+        t_stage = t_prog.get("stage_name", "Idle")
+        t_cur_trend = t_prog.get("current_trend", "")
+        t_detail = t_prog.get("step_detail", "Idle")
+        t_shorts = t_prog.get("shorts_done", 0)
+        t_vids = t_prog.get("videos_done", 0)
+
+        st.markdown("<div class='section-title'>TELEMETRY</div>", unsafe_allow_html=True)
+        if is_t_run or t_pct > 0:
+            st.progress(max(0.0, min(1.0, t_pct / 100.0)), text=f"{t_stage} ({t_pct}%) — {t_detail}")
         else:
-            st.info("No trends. Click 'Scan' above.")
+            st.progress(0.0, text="Paused / Idle")
 
-    with col_telemetry:
-        st.markdown("<div class='section-title'>DAEMON & TELEMETRY</div>", unsafe_allow_html=True)
+        tm1, tm2 = st.columns(2)
+        with tm1:
+            st.metric("Stage", t_stage, delta=f"{t_pct}%" if (is_t_run or t_pct > 0) else None)
+        with tm2:
+            disp_trend = f"{t_cur_trend[:18]}..." if len(t_cur_trend) > 18 else (t_cur_trend or "Scanning...")
+            st.metric("Trend", disp_trend, help=t_cur_trend)
 
-        d_cfg = load_daemon_config()
-        d_running = is_trend_daemon_running()
+        tm3, tm4 = st.columns(2)
+        with tm3:
+            disp_sub = f"{t_detail[:22]}..." if len(t_detail) > 22 else t_detail
+            st.metric("Sub-Step", disp_sub, help=t_detail)
+        with tm4:
+            st.metric("Assets", f"{t_shorts} Reels / {t_vids} Vids", delta=f"{t_shorts+t_vids} total" if (t_shorts+t_vids) > 0 else None)
 
-        if d_running:
-            st.success("🟢 **Active:** 24/7 US Trends → Public.")
-            if st.button("⏹️ Stop", use_container_width=True, type="secondary", key="btn_stop_trend_daemon"):
-                stop_trend_daemon()
-                st.rerun()
+        st.markdown("<div class='section-title'>EVENTS</div>", unsafe_allow_html=True)
+        t_logs = get_daemon_logs(max_lines=40)
+        if t_logs:
+            st.code("\n".join(t_logs[-25:]), language="bash")
         else:
-            st.warning("⚪ **Idle:** Daemon stopped.")
-            if st.button("▶️ Start Daemon", use_container_width=True, type="primary", key="btn_start_trend_daemon"):
-                start_trend_daemon()
-                st.rerun()
+            st.caption("No events.")
 
-        with st.expander("⚙️ Daemon Config", expanded=False):
-            d_poll = st.number_input("Poll (sec)", min_value=60, max_value=3600, value=int(d_cfg.get("poll_interval_sec", 300)), step=60, key="cfg_daemon_poll")
-            d_autoup = st.checkbox("Publish Public", value=bool(d_cfg.get("auto_upload", True)), key="cfg_daemon_autoup")
-            if st.button("💾 Save", key="btn_save_daemon_cfg", use_container_width=True):
-                d_cfg["poll_interval_sec"] = d_poll
-                d_cfg["auto_upload"] = d_autoup
-                save_daemon_config(d_cfg)
-                st.success("Saved")
+    render_trend_daemon_telemetry_box()
 
-        @st.fragment(run_every="3s")
-        def render_trend_daemon_telemetry_box():
-            t_prog = get_daemon_progress()
-            is_t_run = is_trend_daemon_running()
-            t_pct = int(t_prog.get("percent", 0))
-            t_stage = t_prog.get("stage_name", "Idle")
-            t_cur_trend = t_prog.get("current_trend", "")
-            t_detail = t_prog.get("step_detail", "Idle")
-            t_shorts = t_prog.get("shorts_done", 0)
-            t_vids = t_prog.get("videos_done", 0)
 
-            st.markdown("<div class='section-title'>TELEMETRY</div>", unsafe_allow_html=True)
-            if is_t_run or t_pct > 0:
-                st.progress(max(0.0, min(1.0, t_pct / 100.0)), text=f"{t_stage} ({t_pct}%) — {t_detail}")
-            else:
-                st.progress(0.0, text="Paused / Idle")
+def render_live_radar():
+    st.markdown("<div class='section-title'>LIVE RADAR</div>", unsafe_allow_html=True)
+    st.caption("Live Broadcasting Scanner: monitors target channels for real-time streams.")
+    l_cfg = load_livestream_config()
+    channels = l_cfg.get("channels", [])
+    if st.button("📡 Probe All Channels Now", type="primary", key="btn_probe_radar"):
+        with st.spinner("Probing channels..."):
+            for ch in channels:
+                info = check_if_stream_live(ch)
+                if info and info.get("is_live"):
+                    st.success(f"🔴 LIVE: **{info.get('title')}** ({info.get('channel')})")
+                else:
+                    st.info(f"⚪ Offline: {ch}")
+    st.markdown("##### Monitored Channels")
+    for ch in channels:
+        st.markdown(f"- 📺 [{ch}]({ch})")
 
-            tm1, tm2 = st.columns(2)
-            with tm1:
-                st.metric("Stage", t_stage, delta=f"{t_pct}%" if (is_t_run or t_pct > 0) else None)
-            with tm2:
-                disp_trend = f"{t_cur_trend[:18]}..." if len(t_cur_trend) > 18 else (t_cur_trend or "Scanning...")
-                st.metric("Trend", disp_trend, help=t_cur_trend)
 
-            tm3, tm4 = st.columns(2)
-            with tm3:
-                disp_sub = f"{t_detail[:22]}..." if len(t_detail) > 22 else t_detail
-                st.metric("Sub-Step", disp_sub, help=t_detail)
-            with tm4:
-                st.metric("Assets", f"{t_shorts} Reels / {t_vids} Vids", delta=f"{t_shorts+t_vids} total" if (t_shorts+t_vids) > 0 else None)
+def render_vod_radar():
+    st.markdown("<div class='section-title'>VOD RADAR</div>", unsafe_allow_html=True)
+    st.caption("Creator Channel Surveillance: monitors latest uploads for autonomous clipping.")
+    w_cfg = load_watcher_config()
+    channels = w_cfg.get("channels", [])
+    st.markdown(f"**Target Channels ({len(channels)}):**")
+    for ch in channels:
+        st.markdown(f"- 📹 [{ch}]({ch})")
 
-            st.markdown("<div class='section-title'>EVENTS</div>", unsafe_allow_html=True)
-            t_logs = get_daemon_logs(max_lines=40)
-            if t_logs:
-                st.code("\n".join(t_logs[-25:]), language="bash")
-            else:
-                st.caption("No events.")
 
-        render_trend_daemon_telemetry_box()
+def render_learned_topics():
+    st.markdown("<div class='section-title'>LEARNED TOPIC INTELLIGENCE</div>", unsafe_allow_html=True)
+    st.caption("Closed-Loop Data Engine: High-CPM topics and tags discovered from actual viewership.")
+    boost = get_learned_seo_boost()
+    opt_dur = boost.get("target_duration_sec", 34.0)
+    dur_rng = boost.get("duration_range", (24.0, 48.0))
+    tags_list = ", ".join(boost.get("high_cpm_tags", []))
+    utc_hours = str(boost.get("peak_utc_hours", [14, 18, 20]))
 
+    st.info(f"Data-Driven Optimal Duration: **{opt_dur}s** (Range: {dur_rng[0]}s - {dur_rng[1]}s)")
+    st.markdown(f"**Top High-CPM Tags:** `{tags_list}`")
+    st.markdown(f"**Peak Viewing Windows (UTC):** `{utc_hours}` (10 AM - 5 PM US EST)")
+
+
+# Instant Client-Side Tabs (Positioned inside Top Fixed Navbar beside logo)
+tab_mc, tab_research, tab_prod, tab_quality, tab_upload, tab_analytics, tab_learning = st.tabs([
+    "🎛️ Mission",
+    "1. 🔍 Research",
+    "2. ⚙️ Production",
+    "3. ✅ Quality & SEO",
+    "4. 🚀 Upload",
+    "5. 📊 Analytics",
+    "6. 🧠 Learning"
+])
+
+with tab_mc:
+    render_mission_control()
+
+with tab_research:
+    sub_res1, sub_res2, sub_res3, sub_res4 = st.tabs([
+        "🎯 Trends Hunter",
+        "🔴 Live Radar",
+        "🤖 VOD Radar",
+        "💡 Learned Topics"
+    ])
+    with sub_res1:
+        render_trend_hunter()
+    with sub_res2:
+        render_live_radar()
+    with sub_res3:
+        render_vod_radar()
+    with sub_res4:
+        render_learned_topics()
+
+with tab_prod:
+    sub_p1, sub_p2, sub_p3, sub_p4 = st.tabs([
+        "⚡ Trend Factory (P1)",
+        "🔴 Live Buffer (P2)",
+        "🤖 VOD Watcher (P3)",
+        "🎬 Manual Clipper"
+    ])
+    with sub_p1:
+        render_trend_factory()
+    with sub_p2:
+        render_live_buffer()
+    with sub_p3:
+        render_vod_watcher()
+    with sub_p4:
+        render_manual_clipper()
+
+with tab_quality:
+    render_quality_seo_stage(READY_DIR)
+
+with tab_upload:
+    render_upload_stage()
+
+with tab_analytics:
+    render_analytics_stage()
+
+with tab_learning:
+    render_learning_stage()

@@ -417,7 +417,9 @@ def process_video_autonomous(
 
     # Stage 2 to Stage 4: Protected by Arbiter (Priority 3 - VOD)
     push_watcher_log("Waiting for Compute Lock (P3) to run dialogue transcription & QSV render...")
-    acquire_compute_lock("watcher", PRIORITY_VOD, f"VOD: {title[:25]}", timeout=900.0)
+    if not acquire_compute_lock("watcher", PRIORITY_VOD, f"VOD: {title[:25]}", timeout=900.0):
+        push_watcher_log("Failed to acquire Compute Lock (timeout or system paused). Skipping VOD processing.")
+        return
     try:
         # Stage 2: Transcript & Audio
         set_watcher_progress(
@@ -524,6 +526,12 @@ def process_video_autonomous(
             for p in segments_dir.glob(f"seg_raw_{c_idx}.*"):
                 p.unlink(missing_ok=True)
             return final_dest
+
+        if should_yield("watcher", PRIORITY_VOD):
+            push_watcher_log("Higher priority task queued (P1/P2). Yielding VOD compute lock...")
+            release_compute_lock("watcher")
+            time.sleep(3)
+            acquire_compute_lock("watcher", PRIORITY_VOD, f"VOD: {title[:25]}", timeout=900.0)
 
         pool_workers = min(3, max(1, total_cands))
         with concurrent.futures.ThreadPoolExecutor(max_workers=pool_workers) as pool:

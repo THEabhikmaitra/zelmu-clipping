@@ -378,7 +378,9 @@ def process_livestream_slice(
 
     # Stage 2 to Stage 4: Heavy Compute (Whisper AI + Intel QSV) protected by Arbiter Compute Lock
     push_live_log("Waiting for Compute Lock (P2) to run Whisper AI & QSV Render...")
-    acquire_compute_lock("livestream_buffer", PRIORITY_LIVE, f"Live: {title[:25]}", timeout=600.0)
+    if not acquire_compute_lock("livestream_buffer", PRIORITY_LIVE, f"Live: {title[:25]}", timeout=600.0):
+        push_live_log("Failed to acquire Compute Lock (timeout or system paused). Skipping slice.")
+        return
     try:
         # Stage 2: Audio & Transcription
         set_livestream_progress(
@@ -660,12 +662,19 @@ def run_livestream_loop():
             live_info = check_if_stream_live(ch)
             if live_info and live_info.get("is_live"):
                 push_live_log(f"🔴 ACTIVE LIVESTREAM DETECTED: {live_info['title']} ({live_info['url']}) by @{live_info['channel']}")
+                slice_dur = cfg.get("slice_duration_seconds", 300)
+                last_caps = state.setdefault("last_capture_ts", {})
+                last_ts = float(last_caps.get(live_info["id"], 0.0))
+                if (time.time() - last_ts) < (slice_dur - 15):
+                    push_live_log(f"Slice within active window ({int(time.time() - last_ts)}s < {slice_dur - 15}s). Skipping to prevent duplicate.")
+                    continue
+
                 slice_key = f"{live_info['id']}_{int(time.time() // 600)}"  # 1 slice per 10 mins window
                 if slice_key not in processed_slices:
                     try:
                         process_livestream_slice(
                             stream_info=live_info,
-                            slice_duration=cfg.get("slice_duration_seconds", 300),
+                            slice_duration=slice_dur,
                             shorts_count=cfg.get("shorts_per_slice", 2),
                             caption_style=cfg.get("caption_style", "neon"),
                             enable_tracking=cfg.get("enable_tracking", False),
@@ -674,6 +683,8 @@ def run_livestream_loop():
                         )
                         processed_slices.add(slice_key)
                         state["processed_slices"] = list(processed_slices)
+                        last_caps[live_info["id"]] = time.time()
+                        state["last_capture_ts"] = last_caps
                         save_livestream_state(state)
                         active_found += 1
                     except Exception as ex:

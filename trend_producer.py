@@ -286,7 +286,10 @@ def produce_trend_package(
 
     # Step 3 & 4: Heavy Compute Render (Reels + Landscape) via Arbiter P1 Lock
     log("Acquiring Compute Lock (P1) for Reels & Landscape rendering...")
-    acquire_compute_lock("trend_producer", PRIORITY_TREND, f"Trend: {query[:25]}", timeout=600.0)
+    if not acquire_compute_lock("trend_producer", PRIORITY_TREND, f"Trend: {query[:25]}", timeout=600.0):
+        log("Failed to acquire Compute Lock (timeout or system paused). Aborting trend run.")
+        update_status(0, "Aborted", "Compute lock timeout or paused", 0, 0, 0)
+        return False
     try:
         # Step 3: Render 6 Reels (9:16) in Parallel
         update_status(3, "Step 3/5: Rendering Reels", f"Synthesizing voiceovers & rendering 6 Shorts in parallel...", 35, 0, 0)
@@ -311,10 +314,12 @@ def produce_trend_package(
             final_mp4 = READY_DIR / f"Short_{safe_q}_{r_idx+1}_{ts}.mp4"
 
             # Combine video + Piper TTS via Mode A
-            # NO phonk beat, NO pitch-shift/asetrate, NO punch whoosh sound for clean trend news
+            # Visual scene stagger: offset each short by (r_idx * 11) % 60 to prevent duplicate background frames
+            broll_offset = (r_idx * 11) % 60
             cut_vis = work_dir / f"vis_short_{r_idx}.mp4"
             subprocess.run([
                 "ffmpeg", "-y",
+                "-ss", f"{broll_offset:.1f}",
                 "-stream_loop", "-1",
                 "-i", str(source_clip_vertical),
                 "-i", str(wav_path),
