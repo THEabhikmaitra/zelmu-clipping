@@ -219,8 +219,8 @@ st.markdown("""
     }
     div[data-testid="stTabs"] [role="tab"] {
         height: 26px !important;
-        padding: 0 16px !important;
-        font-size: 0.8rem !important;
+        padding: 0 12px !important;
+        font-size: 0.74rem !important;
         font-weight: 500 !important;
         color: #71717a !important;
         border: none !important;
@@ -488,21 +488,65 @@ st.markdown("""
     .dot-warn { background: #eab308; }
     .dot-err { background: #ef4444; }
 
-    /* Clean Form Elements */
+    /* Ultra-Compact High-Density Typography Scale */
+    html, body, [class*="css"], .stMarkdown, p, div, span, label {
+        font-size: 0.78rem !important;
+        line-height: 1.4 !important;
+    }
+
+    /* Streamlit Native Headers Scale */
+    h1 { font-size: 1.10rem !important; font-weight: 700 !important; margin-bottom: 0.4rem !important; }
+    h2 { font-size: 0.95rem !important; font-weight: 700 !important; margin-bottom: 0.35rem !important; }
+    h3 { font-size: 0.85rem !important; font-weight: 600 !important; margin-bottom: 0.3rem !important; }
+    h4, h5, h6 { font-size: 0.78rem !important; font-weight: 600 !important; }
+
+    /* Compact Metrics Scale */
+    div[data-testid="stMetricValue"] {
+        font-size: 1.05rem !important;
+        font-weight: 700 !important;
+        font-family: ui-monospace, SFMono-Regular, monospace !important;
+    }
+    div[data-testid="stMetricLabel"] {
+        font-size: 0.64rem !important;
+        font-weight: 600 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+        color: #71717a !important;
+    }
+    div[data-testid="stMetricDelta"] {
+        font-size: 0.64rem !important;
+    }
+
+    /* Clean Form Elements (Compact) */
     .stTextArea textarea, .stTextInput input, .stSelectbox [data-baseweb="select"] {
         background-color: #121215 !important;
         border: 1px solid #27272a !important;
         border-radius: 6px !important;
         color: #f4f4f5 !important;
-        font-size: 0.84rem !important;
+        font-size: 0.78rem !important;
+        padding: 4px 8px !important;
+    }
+    .stSelectbox div[role="listbox"] * {
+        font-size: 0.76rem !important;
+    }
+    .stSlider [data-testid="stSliderTickBarMin"],
+    .stSlider [data-testid="stSliderTickBarMax"],
+    .stSlider [data-testid="stTickBarValue"] {
+        font-size: 0.65rem !important;
+    }
+
+    /* Compact Action Buttons */
+    .stButton > button {
+        font-size: 0.76rem !important;
+        padding: 2px 10px !important;
+        border-radius: 5px !important;
     }
     .stButton > button[kind="primary"] {
         background-color: #f4f4f5 !important;
         color: #09090b !important;
-        font-weight: 500 !important;
+        font-weight: 600 !important;
         border: 1px solid #f4f4f5 !important;
-        border-radius: 6px !important;
-        font-size: 0.84rem !important;
+        font-size: 0.76rem !important;
         transition: opacity 0.15s ease;
     }
     .stButton > button[kind="primary"]:hover {
@@ -512,8 +556,7 @@ st.markdown("""
         background-color: #121215 !important;
         color: #a1a1aa !important;
         border: 1px solid #27272a !important;
-        border-radius: 6px !important;
-        font-size: 0.8rem !important;
+        font-size: 0.74rem !important;
     }
     .stButton > button[kind="secondary"]:hover {
         border-color: #3f3f46 !important;
@@ -529,9 +572,10 @@ st.markdown("""
     }
     div[data-testid="stCode"] pre {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
-        font-size: 11.5px !important;
+        font-size: 10.5px !important;
+        line-height: 1.35 !important;
         color: #a1a1aa !important;
-        max-height: 320px !important;
+        max-height: 300px !important;
         overflow-y: auto !important;
     }
     div[data-testid="stCode"] button[title="Copy to clipboard"],
@@ -543,6 +587,7 @@ st.markdown("""
         border: 1px solid #27272a !important;
         border-radius: 4px !important;
         color: #f4f4f5 !important;
+        font-size: 0.65rem !important;
     }
     div[data-testid="stCode"] button[title="Copy to clipboard"]:hover,
     div[data-testid="stCode"] [data-testid="stCodeCopyButton"]:hover {
@@ -550,22 +595,32 @@ st.markdown("""
         background: #27272a !important;
         border-color: #3f3f46 !important;
     }
+
+    /* Section Titles & Badges */
     .section-title {
-        font-size: 0.72rem;
-        font-weight: 600;
-        letter-spacing: 0.06em;
-        color: #71717a;
-        margin-top: 1.25rem;
-        margin-bottom: 0.5rem;
-        text-transform: uppercase;
+        font-size: 0.66rem !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.06em !important;
+        color: #71717a !important;
+        margin-top: 0.95rem !important;
+        margin-bottom: 0.35rem !important;
+        text-transform: uppercase !important;
     }
     .sidebar-header {
-        font-size: 0.68rem;
-        font-weight: 600;
-        letter-spacing: 0.06em;
-        color: #71717a;
-        text-transform: uppercase;
-        margin-bottom: 0.5rem;
+        font-size: 0.64rem !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.06em !important;
+        color: #71717a !important;
+        text-transform: uppercase !important;
+        margin-bottom: 0.35rem !important;
+    }
+    .stCaption, small {
+        font-size: 0.70rem !important;
+        color: #71717a !important;
+    }
+    div[data-testid="stExpander"] details summary span {
+        font-size: 0.76rem !important;
+        font-weight: 600 !important;
     }
 </style>
 """, unsafe_allow_html=True)
