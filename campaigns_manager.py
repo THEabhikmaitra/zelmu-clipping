@@ -428,6 +428,25 @@ def import_contentrewards_campaign(campaign_url: str) -> Dict[str, Any]:
         except Exception:
             pass
 
+    # Extract comprehensive full description from Next.js dehydrated query data
+    desc_pats = [
+        re.compile(r'\\\"description\\\":\s*\\\"(.*?)\\\"', re.DOTALL),
+        re.compile(r'\"description\":\s*\"(.*?)\"', re.DOTALL)
+    ]
+    full_desc_candidates = []
+    if service_desc:
+        full_desc_candidates.append(service_desc)
+
+    for pat in desc_pats:
+        for m in pat.findall(html):
+            clean = m.replace(r'\"', '"').replace(r'\\n', '\n').replace(r'\n', '\n').replace(r'\\', '')
+            clean = clean.strip()
+            if clean and "Content Rewards is where" not in clean and "Launch a campaign" not in clean:
+                full_desc_candidates.append(clean)
+
+    # Pick the longest, most detailed description
+    full_description = max(full_desc_candidates, key=len) if full_desc_candidates else (service_desc or "Clip highlights adhering strictly to sponsor instructions.")
+
     cpm_m = re.search(r'\$([0-9]+(?:\.[0-9]+)?)\s*(?:/|per)\s*1K', html, re.IGNORECASE)
     cpm = float(cpm_m.group(1)) if cpm_m else 1.0
 
@@ -455,8 +474,8 @@ def import_contentrewards_campaign(campaign_url: str) -> Dict[str, Any]:
     name = service_name or provider_name or "ContentRewards Campaign"
     target_views = int((revenue_goal / max(0.1, cpm)) * 1000)
 
-    audience = "Gamers & Esports" if any(w in (name + service_desc).lower() for w in ["gta", "game", "gaming", "play"]) else (
-        "Tech & AI Enthusiasts" if any(w in (name + service_desc).lower() for w in ["tech", "ai", "crypto", "app"]) else "General Viral"
+    audience = "Gamers & Esports" if any(w in (name + full_description).lower() for w in ["gta", "game", "gaming", "play"]) else (
+        "Tech & AI Enthusiasts" if any(w in (name + full_description).lower() for w in ["tech", "ai", "crypto", "app"]) else "General Viral"
     )
 
     campaign_data = {
@@ -468,7 +487,7 @@ def import_contentrewards_campaign(campaign_url: str) -> Dict[str, Any]:
         "target_views": target_views,
         "target_country": "United States (US)",
         "target_audience": audience,
-        "description_brief": service_desc or f"Create viral clips and highlights for {name} strictly adhering to sponsor brief.",
+        "description_brief": full_description,
         "mandatory_hashtags": mandatory_tags,
         "sponsor_link": campaign_url,
         "source_footage_url": source_url,

@@ -2921,7 +2921,7 @@ def render_campaign_clipper():
 
             st.metric("Revenue Cap / Goal", f"${rev_g:,.2f}", delta=f"${cpm_r:.2f} CPM")
             st.metric("Target Views Needed (KPI)", f"{t_views:,} views")
-            st.caption(f"**Brief:** {active_camp.get('description_brief', 'N/A')[:100]}...")
+            st.caption(f"**Audience:** {active_camp.get('target_audience', 'General')} | **Geo:** {active_camp.get('target_country', 'US')}")
             st.caption(f"**Hashtags:** `{active_camp.get('mandatory_hashtags', '#Shorts')}`")
 
             if st.button("🗑️ Remove Campaign", type="secondary", use_container_width=True, key=f"btn_del_camp_{active_camp.get('id')}"):
@@ -2932,6 +2932,12 @@ def render_campaign_clipper():
     if not active_camp:
         st.info("No active campaign configured. Select a campaign from the live marketplace above to adopt its goals.")
         return
+
+    # Full Campaign Brief, Instructions & Guidelines
+    with st.expander("📋 Full Campaign Brief, Instructions & Deliverables", expanded=True):
+        st.markdown(f"**Campaign:** `{active_camp.get('name')}` &bull; [Inspect Live on ContentRewards ↗]({active_camp.get('sponsor_link', 'https://contentrewards.com')})")
+        full_desc = active_camp.get("description_brief", "No detailed description provided.")
+        st.info(full_desc)
 
     # Campaign Clipping Engine
     st.markdown("<div class='section-title'>⚡ 1-CLICK CAMPAIGN CLIPPING GENERATOR</div>", unsafe_allow_html=True)
