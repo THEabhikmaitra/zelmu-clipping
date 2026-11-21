@@ -765,62 +765,62 @@ def render_labor_card(
 
 # Instant Client-Side Tabs (Positioned inside Top Fixed Navbar beside logo)
 tab_mc, tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🎛️ Mission Control",
+    "🎛️ Mission",
     "Produce",
     "Upload",
-    "🤖 24/7 Channel Watcher (VODs)",
-    "🔴 Live Stream Clipper (HLS)",
-    "🎯 Trend Hunter (USA 4h)"
+    "🤖 VODs",
+    "🔴 Live",
+    "🎯 Trends"
 ])
 
 with tab_mc:
     # 1. Master System Control Row
-    st.markdown("<div class='section-title'>🎛️ AUTONOMOUS MISSION CONTROL & ARBITER DECK</div>", unsafe_allow_html=True)
-    st.caption("Central command for all 3 autonomous background daemons (Trend Hunter, Live Clipper, Channel Watcher). Manages hardware mutual exclusion (Intel QSV encoder & Whisper AI memory) to eliminate system breaks and RAM saturation.")
+    st.markdown("<div class='section-title'>MISSION CONTROL</div>", unsafe_allow_html=True)
+    st.caption("Hardware mutex & fleet status.")
 
     paused = is_system_paused()
     col_p1, col_p2, col_p3 = st.columns([2.5, 1.2, 1.2])
     with col_p1:
         if paused:
-            st.error("⏸️ **SYSTEM PAUSED:** All background daemons are paused. Compute queues are suspended.")
+            st.error("⏸️ **PAUSED:** Background engines suspended.")
         else:
-            st.success("🟢 **SYSTEM ACTIVE:** Compute arbiter operating normally. Priority: Trend (P1) > Live (P2) > VOD (P3).")
+            st.success("🟢 **ACTIVE:** P1 Trend > P2 Live > P3 VOD.")
     with col_p2:
         if paused:
-            if st.button("▶️ RESUME ALL", type="primary", use_container_width=True, key="mc_btn_resume"):
+            if st.button("▶️ RESUME", type="primary", use_container_width=True, key="mc_btn_resume"):
                 resume_all_daemons()
                 st.rerun()
         else:
-            if st.button("⏸️ PAUSE ALL", type="secondary", use_container_width=True, key="mc_btn_pause"):
+            if st.button("⏸️ PAUSE", type="secondary", use_container_width=True, key="mc_btn_pause"):
                 pause_all_daemons()
                 st.rerun()
     with col_p3:
-        if st.button("🔄 Refresh State", use_container_width=True, key="mc_btn_refresh"):
+        if st.button("🔄 Refresh", use_container_width=True, key="mc_btn_refresh"):
             st.rerun()
 
     st.markdown("---")
 
     # 2. Engine Control Grid (3 Cards)
-    st.markdown("<div class='section-title'>⚙️ BACKGROUND ENGINE FLEET</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>FLEET</div>", unsafe_allow_html=True)
     ec1, ec2, ec3 = st.columns(3, gap="medium")
 
     # Card 1: Trend Hunter (P1)
     with ec1:
         t_running = is_trend_daemon_running()
         t_prog = get_daemon_progress()
-        st.markdown("### 🎯 Trend Hunter (P1)")
-        st.caption("Breakout US news & search spikes.")
+        st.markdown("### 🎯 Trend (P1)")
+        st.caption("US news & search spikes.")
         if t_running:
             st.markdown("Status: 🟢 **Running**")
             st.markdown(f"**Stage:** `{t_prog.get('stage_name', 'Active')}`")
-            st.markdown(f"**Active Trend:** *{t_prog.get('current_trend') or 'Scanning US Trends'}*")
-            if st.button("⏹️ Stop Trend Worker", use_container_width=True, key="mc_stop_trend"):
+            st.markdown(f"**Trend:** *{t_prog.get('current_trend') or 'Scanning'}*")
+            if st.button("⏹️ Stop", use_container_width=True, key="mc_stop_trend"):
                 stop_trend_daemon()
                 st.rerun()
         else:
             st.markdown("Status: ⚪ **Stopped**")
-            st.caption("Engine offline. No trends being converted.")
-            if st.button("🚀 Start Trend Worker", type="primary", use_container_width=True, key="mc_start_trend"):
+            st.caption("Offline.")
+            if st.button("▶️ Start", type="primary", use_container_width=True, key="mc_start_trend"):
                 start_trend_daemon()
                 st.rerun()
 
@@ -828,19 +828,19 @@ with tab_mc:
     with ec2:
         l_running = is_livestream_running()
         l_prog = get_livestream_progress()
-        st.markdown("### 🔴 Live Clipper (P2)")
-        st.caption("Active YouTube live streams.")
+        st.markdown("### 🔴 Live (P2)")
+        st.caption("YouTube livestreams.")
         if l_running:
             st.markdown("Status: 🟢 **Running**")
             st.markdown(f"**Stage:** `{l_prog.get('stage_label', 'Active')}`")
-            st.markdown(f"**Live Stream:** *{l_prog.get('stream_title') or 'Scanning Channels'}*")
-            if st.button("⏹️ Stop Live Buffer", use_container_width=True, key="mc_stop_live"):
+            st.markdown(f"**Stream:** *{l_prog.get('stream_title') or 'Scanning'}*")
+            if st.button("⏹️ Stop", use_container_width=True, key="mc_stop_live"):
                 stop_livestream_daemon()
                 st.rerun()
         else:
             st.markdown("Status: ⚪ **Stopped**")
-            st.caption("Engine offline. No live streams tracked.")
-            if st.button("🚀 Start Live Buffer", type="primary", use_container_width=True, key="mc_start_live"):
+            st.caption("Offline.")
+            if st.button("▶️ Start", type="primary", use_container_width=True, key="mc_start_live"):
                 start_livestream_daemon()
                 st.rerun()
 
@@ -848,19 +848,19 @@ with tab_mc:
     with ec3:
         w_running = is_watcher_running()
         w_prog = get_watcher_progress()
-        st.markdown("### 🤖 VOD Watcher (P3)")
-        st.caption("Archive video uploads & channels.")
+        st.markdown("### 🤖 VOD (P3)")
+        st.caption("Channel VOD archives.")
         if w_running:
             st.markdown("Status: 🟢 **Running**")
             st.markdown(f"**Stage:** `{w_prog.get('stage_name', 'Active')}`")
-            st.markdown(f"**Active Video:** *{w_prog.get('video_title') or 'Scanning Uploads'}*")
-            if st.button("⏹️ Stop VOD Watcher", use_container_width=True, key="mc_stop_vod"):
+            st.markdown(f"**Video:** *{w_prog.get('video_title') or 'Scanning'}*")
+            if st.button("⏹️ Stop", use_container_width=True, key="mc_stop_vod"):
                 stop_watcher_daemon()
                 st.rerun()
         else:
             st.markdown("Status: ⚪ **Stopped**")
-            st.caption("Engine offline. No channels monitored.")
-            if st.button("🚀 Start VOD Watcher", type="primary", use_container_width=True, key="mc_start_vod"):
+            st.caption("Offline.")
+            if st.button("▶️ Start", type="primary", use_container_width=True, key="mc_start_vod"):
                 start_watcher_daemon()
                 st.rerun()
 
@@ -870,7 +870,7 @@ with tab_mc:
     col_logs, col_arbiter = st.columns([1.7, 1.0], gap="large")
 
     with col_arbiter:
-        st.markdown("<div class='section-title'>🔒 COMPUTE RESOURCE ARBITER</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>ARBITER</div>", unsafe_allow_html=True)
         @st.fragment(run_every="3s")
         def render_mc_arbiter_deck():
             arb = get_arbiter_status()
@@ -882,28 +882,28 @@ with tab_mc:
 
             m1, m2 = st.columns(2)
             with m1:
-                st.metric("Compute Lock Holder", holder or "None (Unlocked)", delta=f"P{p_val}" if holder else "Free")
+                st.metric("Lock Holder", holder or "None (Free)", delta=f"P{p_val}" if holder else "Free")
             with m2:
-                st.metric("Active Operation", f"{op[:20]}..." if len(op) > 20 else op, delta=f"{held}s held" if holder else None)
+                st.metric("Operation", f"{op[:18]}..." if len(op) > 18 else op, delta=f"{held}s held" if holder else None)
 
-            st.markdown(f"**Wait Queue:** `{q_len}` engine(s) waiting")
+            st.markdown(f"**Queue:** `{q_len}` waiting")
             if arb.get("queue"):
                 for q_item in arb["queue"]:
                     st.caption(f"⏳ **P{q_item['priority']}**: {q_item['caller']} — *{q_item['operation']}*")
             else:
-                st.caption("No engines queued. Hardware resources clear.")
+                st.caption("Queue empty.")
 
         render_mc_arbiter_deck()
 
     with col_logs:
-        st.markdown("<div class='section-title'>⚡ CONSOLIDATED EVENT STREAM (LIVE 3S REFRESH)</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>EVENTS</div>", unsafe_allow_html=True)
         @st.fragment(run_every="3s")
         def render_mc_unified_log_box():
             logs = get_unified_logs(max_lines=45)
             if logs:
                 st.code("\n".join(logs[-30:]), language="bash")
             else:
-                st.caption("No unified events recorded yet. Start any engine to stream events.")
+                st.caption("No events.")
 
         render_mc_unified_log_box()
 
@@ -1959,7 +1959,7 @@ with tab2:
         st.caption("No upload history recorded yet.")
 
 with tab3:
-    st.markdown("<div class='section-title'>24/7 AUTONOMOUS CHANNEL WATCHER</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>VOD CLIPPER</div>", unsafe_allow_html=True)
     watcher_cfg = load_watcher_config()
     running = is_watcher_running()
 
@@ -1967,20 +1967,19 @@ with tab3:
     col_w_status, col_w_action = st.columns([2, 1])
     with col_w_status:
         if running:
-            st.success("🟢 **Autopilot Active:** Background daemon is monitoring channels for new GTA 6 uploads.")
+            st.success("🟢 **Active:** Monitoring uploads.")
         else:
-            st.info("⚪ **Autopilot Idle:** Daemon is paused. Click 'Start 24/7 Autopilot' to monitor channels automatically.")
+            st.info("⚪ **Idle:** Watcher paused.")
 
     with col_w_action:
         if running:
-            if st.button("⏹️ Stop Autopilot", type="secondary", use_container_width=True):
+            if st.button("⏹️ Stop", type="secondary", use_container_width=True):
                 stop_watcher_daemon()
                 watcher_cfg["enabled"] = False
                 save_watcher_config(watcher_cfg)
                 st.rerun()
         else:
-            if st.button("▶️ Start 24/7 Autopilot", type="primary", use_container_width=True):
-                # Ensure all entered channels are saved immediately before daemon starts
+            if st.button("▶️ Start Watcher", type="primary", use_container_width=True):
                 raw_chs = st.session_state.get("txt_watcher_channels", "")
                 if raw_chs.strip():
                     watcher_cfg["channels"] = [c.strip() for c in raw_chs.splitlines() if c.strip()]
@@ -1995,30 +1994,30 @@ with tab3:
     col_cfg_left, col_cfg_right = st.columns([1.5, 1])
 
     with col_cfg_left:
-        st.caption("TARGET CHANNELS TO MONITOR (One URL per line)")
+        st.caption("CHANNELS (1/line)")
         if "txt_watcher_channels" not in st.session_state:
             st.session_state["txt_watcher_channels"] = "\n".join(watcher_cfg.get("channels", []))
         ch_input = st.text_area(
             "Monitored Channels",
             height=140,
             label_visibility="collapsed",
-            help="Enter YouTube channel video URLs or handles to watch (e.g. https://www.youtube.com/@RockstarGames)",
+            placeholder="https://www.youtube.com/@Channel",
             key="txt_watcher_channels"
         )
 
     with col_cfg_right:
-        st.caption("AUTOPILOT SETTINGS")
+        st.caption("SETTINGS")
         poll_int = st.select_slider(
-            "Polling Interval",
+            "Interval",
             options=[15, 30, 45, 60, 120],
             value=watcher_cfg.get("check_interval_minutes", 15),
-            format_func=lambda x: f"Every {x} minutes"
+            format_func=lambda x: f"{x} min"
         )
-        shorts_n = st.slider("Shorts per New Video", min_value=2, max_value=8, value=watcher_cfg.get("shorts_per_video", 4))
-        auto_up = st.checkbox("🎯 Auto-Schedule to YouTube Studio", value=watcher_cfg.get("auto_upload", True), help="Automatically queues and schedules newly extracted Shorts across daily peak High-CPM slots")
-        hook_bg = st.checkbox("🔥 Burn Frame-1 Viral Hook Badge", value=watcher_cfg.get("enable_hook_badge", True), help="Adds curiosity banner on frame 1 to maximize swipe-through CTR")
+        shorts_n = st.slider("Shorts/Video", min_value=2, max_value=8, value=watcher_cfg.get("shorts_per_video", 4))
+        auto_up = st.checkbox("Auto-Schedule (Studio)", value=watcher_cfg.get("auto_upload", True))
+        hook_bg = st.checkbox("Burn Hook Badge", value=watcher_cfg.get("enable_hook_badge", True))
 
-    if st.button("💾 Save Autopilot Configuration", use_container_width=True):
+    if st.button("💾 Save Settings", use_container_width=True):
         raw_chs = st.session_state.get("txt_watcher_channels", "")
         parsed_channels = [c.strip() for c in raw_chs.splitlines() if c.strip()]
         watcher_cfg["channels"] = parsed_channels
@@ -2027,7 +2026,7 @@ with tab3:
         watcher_cfg["auto_upload"] = auto_up
         watcher_cfg["enable_hook_badge"] = hook_bg
         save_watcher_config(watcher_cfg)
-        st.success(f"✓ Autopilot configuration saved! ({len(parsed_channels)} target channels registered)")
+        st.success("✓ Saved")
 
     # Live Real-Time Autopilot Stage & Progress Telemetry (Auto-updates every 3s)
     @st.fragment(run_every="3s")
@@ -2037,51 +2036,48 @@ with tab3:
 
         pct = prog.get("percentage", 0)
         status = prog.get("status", "idle")
-        stage_lbl = prog.get("stage_label", "Autopilot Idle")
-        detail = prog.get("step_detail", "Ready to monitor channels.")
-        next_step = prog.get("next_step", "Detecting new videos")
+        stage_lbl = prog.get("stage_label", "Idle")
+        detail = prog.get("step_detail", "Ready.")
+        next_step = prog.get("next_step", "Scan uploads")
         vid_title = prog.get("video_title", "")
         ch_name = prog.get("channel_name", "")
         cur_clip = prog.get("current_clip", 0)
         tot_clips = prog.get("total_clips", 0)
 
-        st.markdown("<div class='section-title'>⚡ REAL-TIME AUTOPILOT PIPELINE PROGRESS</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>PROGRESS</div>", unsafe_allow_html=True)
 
-        # Real Progress Bar
         if is_run and status not in ("idle", "waiting"):
-            st.progress(min(1.0, max(0.0, pct / 100.0)), text=f"{stage_lbl} — {pct}% COMPLETE")
+            st.progress(min(1.0, max(0.0, pct / 100.0)), text=f"{stage_lbl} — {pct}%")
         elif is_run and status == "waiting":
-            st.progress(1.0, text="✓ Cycle Finished — Waiting for next polling interval")
+            st.progress(1.0, text="✓ Cycle Finished")
         else:
-            st.progress(0.0, text="Autopilot Paused / Idle")
+            st.progress(0.0, text="Paused / Idle")
 
-        # Telemetry Cards
         m1, m2, m3, m4 = st.columns(4)
         with m1:
-            st.metric("Current Stage", stage_lbl, delta=f"{pct}% complete" if is_run and pct > 0 else None)
+            st.metric("Stage", stage_lbl, delta=f"{pct}%" if is_run and pct > 0 else None)
         with m2:
-            display_title = f"{vid_title[:24]}..." if len(vid_title) > 24 else (vid_title or "No active video")
-            st.metric("Active Video", display_title, help=f"{vid_title} (@{ch_name})" if vid_title else None)
+            display_title = f"{vid_title[:20]}..." if len(vid_title) > 20 else (vid_title or "None")
+            st.metric("Video", display_title)
         with m3:
-            clip_info = f" (Clip {cur_clip}/{tot_clips})" if tot_clips > 0 else ""
-            display_detail = f"{detail[:28]}..." if len(detail) > 28 else detail
-            st.metric("Current Step", display_detail, delta=clip_info if clip_info else None, help=detail)
+            clip_info = f" ({cur_clip}/{tot_clips})" if tot_clips > 0 else ""
+            display_detail = f"{detail[:22]}..." if len(detail) > 22 else detail
+            st.metric("Sub-Step", display_detail, delta=clip_info if clip_info else None)
         with m4:
-            display_next = f"{next_step[:26]}..." if len(next_step) > 26 else next_step
-            st.metric("Next Step", display_next, help=next_step)
+            display_next = f"{next_step[:20]}..." if len(next_step) > 20 else next_step
+            st.metric("Next", display_next)
 
-        # Live Autonomous Event Stream
-        st.markdown("<div class='section-title'>AUTONOMOUS EVENT STREAM (LIVE 3S REFRESH)</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>EVENTS</div>", unsafe_allow_html=True)
         w_logs = get_watcher_logs()
         if w_logs:
             st.code("\n".join(w_logs[-25:]), language="bash")
         else:
-            st.caption("No watcher events recorded yet. Start autopilot to begin streaming channel checks.")
+            st.caption("No events.")
 
     render_autopilot_live_telemetry()
 
 with tab4:
-    st.markdown("<div class='section-title'>🔴 LIVE STREAM ROLLING BUFFER & HLS CLIPPER</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>LIVE CLIPPER</div>", unsafe_allow_html=True)
     live_cfg = load_livestream_config()
     live_running = is_livestream_running()
 
@@ -2089,19 +2085,19 @@ with tab4:
     col_l_status, col_l_action = st.columns([2, 1])
     with col_l_status:
         if live_running:
-            st.success("🟢 **Live Stream Buffer Active:** Monitoring active YouTube livestreams for rolling HLS clip capture.")
+            st.success("🟢 **Active:** Rolling HLS capture.")
         else:
-            st.info("⚪ **Live Stream Buffer Idle:** Daemon paused. Click 'Start Live Stream Clipper' to capture rolling HLS windows from live streams.")
+            st.info("⚪ **Idle:** Clipper paused.")
 
     with col_l_action:
         if live_running:
-            if st.button("⏹️ Stop Live Clipper", type="secondary", use_container_width=True, key="btn_stop_live_clipper"):
+            if st.button("⏹️ Stop", type="secondary", use_container_width=True, key="btn_stop_live_clipper"):
                 stop_livestream_daemon()
                 live_cfg["enabled"] = False
                 save_livestream_config(live_cfg)
                 st.rerun()
         else:
-            if st.button("▶️ Start Live Stream Clipper", type="primary", use_container_width=True, key="btn_start_live_clipper"):
+            if st.button("▶️ Start Clipper", type="primary", use_container_width=True, key="btn_start_live_clipper"):
                 raw_chs = st.session_state.get("txt_live_channels", "")
                 if raw_chs.strip():
                     live_cfg["channels"] = [c.strip() for c in raw_chs.splitlines() if c.strip()]
@@ -2116,31 +2112,31 @@ with tab4:
     col_lcfg_left, col_lcfg_right = st.columns([1.5, 1])
 
     with col_lcfg_left:
-        st.caption("TARGET LIVESTREAMS OR CHANNEL LIVE HANDLES (One URL per line)")
+        st.caption("CHANNELS (1/line)")
         if "txt_live_channels" not in st.session_state:
             st.session_state["txt_live_channels"] = "\n".join(live_cfg.get("channels", []))
         live_ch_input = st.text_area(
             "Live Streams to Monitor",
             height=140,
             label_visibility="collapsed",
-            help="Enter YouTube livestream URLs or channel live handles (e.g. https://www.youtube.com/@IShowSpeed/live)",
+            placeholder="https://www.youtube.com/@Channel/live",
             key="txt_live_channels"
         )
 
     with col_lcfg_right:
-        st.caption("ROLLING BUFFER & CLIPPING SETTINGS")
+        st.caption("SETTINGS")
         slice_dur = st.select_slider(
-            "Rolling Buffer Window",
+            "Buffer Window",
             options=[180, 300, 600, 900],
             value=live_cfg.get("slice_duration_seconds", 300),
-            format_func=lambda x: f"{x // 60} Minutes Buffer",
+            format_func=lambda x: f"{x // 60} min",
             key="sl_live_slice_dur"
         )
-        shorts_per_slice = st.slider("Shorts per Live Slice", min_value=1, max_value=4, value=live_cfg.get("shorts_per_slice", 2), key="sl_live_shorts_slice")
-        live_auto_up = st.checkbox("🎯 Auto-Schedule to YouTube Studio", value=live_cfg.get("auto_upload", True), key="chk_live_auto_up", help="Automatically schedules live shorts across High-CPM monetization slots")
-        live_hook = st.checkbox("🔥 Burn '🔴 LIVE' Hook Badge", value=live_cfg.get("enable_hook_badge", True), key="chk_live_hook", help="Burns dynamic '🔴 LIVE HIGHLIGHT' curiosity badge into frame 1")
+        shorts_per_slice = st.slider("Shorts/Slice", min_value=1, max_value=4, value=live_cfg.get("shorts_per_slice", 2), key="sl_live_shorts_slice")
+        live_auto_up = st.checkbox("Auto-Schedule (Studio)", value=live_cfg.get("auto_upload", True), key="chk_live_auto_up")
+        live_hook = st.checkbox("Burn Live Badge", value=live_cfg.get("enable_hook_badge", True), key="chk_live_hook")
 
-    if st.button("💾 Save Live Stream Configuration", use_container_width=True, key="btn_save_live_cfg"):
+    if st.button("💾 Save Settings", use_container_width=True, key="btn_save_live_cfg"):
         raw_chs = st.session_state.get("txt_live_channels", "")
         parsed_chs = [c.strip() for c in raw_chs.splitlines() if c.strip()]
         live_cfg["channels"] = parsed_chs
@@ -2149,7 +2145,7 @@ with tab4:
         live_cfg["auto_upload"] = live_auto_up
         live_cfg["enable_hook_badge"] = live_hook
         save_livestream_config(live_cfg)
-        st.success(f"✓ Live Stream configuration saved! ({len(parsed_chs)} stream targets registered)")
+        st.success("✓ Saved")
 
     # Live Real-Time Telemetry for Tab 4
     @st.fragment(run_every="3s")
@@ -2159,46 +2155,43 @@ with tab4:
 
         l_pct = l_prog.get("percentage", 0)
         l_status = l_prog.get("status", "idle")
-        l_stage = l_prog.get("stage_label", "Live Buffer Idle")
-        l_detail = l_prog.get("step_detail", "Ready to monitor active live streams.")
-        l_next = l_prog.get("next_step", "Scan live streams")
+        l_stage = l_prog.get("stage_label", "Idle")
+        l_detail = l_prog.get("step_detail", "Ready.")
+        l_next = l_prog.get("next_step", "Scan streams")
         l_title = l_prog.get("stream_title", "")
         l_author = l_prog.get("channel_name", "")
         l_cur_clip = l_prog.get("current_clip", 0)
         l_tot_clips = l_prog.get("total_clips", 0)
 
-        st.markdown("<div class='section-title'>⚡ LIVE STREAM HLS BUFFER TELEMETRY</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>TELEMETRY</div>", unsafe_allow_html=True)
 
-        # Progress bar
         if is_l_run and l_status not in ("idle", "waiting"):
-            st.progress(min(1.0, max(0.0, l_pct / 100.0)), text=f"{l_stage} — {l_pct}% COMPLETE")
+            st.progress(min(1.0, max(0.0, l_pct / 100.0)), text=f"{l_stage} — {l_pct}%")
         elif is_l_run and l_status == "waiting":
-            st.progress(1.0, text="✓ Live Slice Clipped & Scheduled — Monitoring stream")
+            st.progress(1.0, text="✓ Clipped & Scheduled")
         else:
-            st.progress(0.0, text="Live Buffer Paused / Idle")
+            st.progress(0.0, text="Paused / Idle")
 
-        # Telemetry metrics
         lm1, lm2, lm3, lm4 = st.columns(4)
         with lm1:
-            st.metric("Live Stage", l_stage, delta=f"{l_pct}% complete" if is_l_run and l_pct > 0 else None)
+            st.metric("Stage", l_stage, delta=f"{l_pct}%" if is_l_run and l_pct > 0 else None)
         with lm2:
-            display_ltitle = f"{l_title[:24]}..." if len(l_title) > 24 else (l_title or "No active stream")
-            st.metric("Active Stream", display_ltitle, help=f"{l_title} (@{l_author})" if l_title else None)
+            display_ltitle = f"{l_title[:20]}..." if len(l_title) > 20 else (l_title or "None")
+            st.metric("Stream", display_ltitle)
         with lm3:
-            clip_str = f" (Clip {l_cur_clip}/{l_tot_clips})" if l_tot_clips > 0 else ""
-            display_ldetail = f"{l_detail[:28]}..." if len(l_detail) > 28 else l_detail
-            st.metric("Buffer Sub-Step", display_ldetail, delta=clip_str if clip_str else None, help=l_detail)
+            clip_str = f" ({l_cur_clip}/{l_tot_clips})" if l_tot_clips > 0 else ""
+            display_ldetail = f"{l_detail[:22]}..." if len(l_detail) > 22 else l_detail
+            st.metric("Sub-Step", display_ldetail, delta=clip_str if clip_str else None)
         with lm4:
-            display_lnext = f"{l_next[:26]}..." if len(l_next) > 26 else l_next
-            st.metric("Next Step", display_lnext, help=l_next)
+            display_lnext = f"{l_next[:20]}..." if len(l_next) > 20 else l_next
+            st.metric("Next", display_lnext)
 
-        # Live Autonomous Event Stream
-        st.markdown("<div class='section-title'>LIVE STREAM EVENT STREAM (LIVE 3S REFRESH)</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>EVENTS</div>", unsafe_allow_html=True)
         l_logs = get_livestream_logs()
         if l_logs:
             st.code("\n".join(l_logs[-25:]), language="bash")
         else:
-            st.caption("No livestream events recorded yet. Start live buffer to begin capturing HLS streams.")
+            st.caption("No events.")
 
     render_livestream_live_telemetry()
 
@@ -2206,18 +2199,18 @@ with tab5:
     col_list, col_telemetry = st.columns([1.35, 1.0], gap="large")
 
     with col_list:
-        st.markdown("<div class='section-title'>🎯 USA BREAKOUT TREND HUNTER (GOOGLE TRENDS 4H)</div>", unsafe_allow_html=True)
-        st.caption("Directly tracks `https://trends.google.com/trending?geo=US&status=active&hours=4&sort=recency`. Automatically detects breakout search spikes in the United States in the last 4 hours before they saturate, generates 6+ Reels (9:16) + 2+ Landscape Videos (16:9) per trend, and schedules them directly to YouTube Studio on @zelmuesports.")
+        st.markdown("<div class='section-title'>TREND HUNTER</div>", unsafe_allow_html=True)
+        st.caption("Google Trends (US 4h) → 6 Shorts + 2 Landscape (Public).")
 
         # Trend Scanner Parameters
-        st.markdown("<div class='section-title'>TREND SCANNER PARAMETERS</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>SCANNER</div>", unsafe_allow_html=True)
         p1, p2, p3, p4, p5 = st.columns([1, 1, 1.1, 1.4, 1.3])
         with p1:
-            trend_geo = st.selectbox("Geo Region", ["US", "GB", "CA", "AU"], index=0, key="trend_geo")
+            trend_geo = st.selectbox("Geo", ["US", "GB", "CA", "AU"], index=0, key="trend_geo")
         with p2:
-            trend_hours = st.selectbox("Time Window", [4, 24, 48], index=0, format_func=lambda x: f"Past {x} Hours", key="trend_hours")
+            trend_hours = st.selectbox("Window", [4, 24, 48], index=0, format_func=lambda x: f"Past {x}h", key="trend_hours")
         with p3:
-            trend_sort = st.selectbox("Sort By", ["recency", "search-volume"], index=0, format_func=lambda x: "Recency (Breakouts)" if x == "recency" else "Search Volume", key="trend_sort")
+            trend_sort = st.selectbox("Sort", ["recency", "search-volume"], index=0, format_func=lambda x: "Recency" if x == "recency" else "Volume", key="trend_sort")
         with p4:
             cat_keys = list(CATEGORIES.keys())
             sel_cat_key = st.selectbox("Category", cat_keys, index=0, format_func=lambda k: CATEGORIES[k]["label"], key="trend_cat")
@@ -2226,10 +2219,10 @@ with tab5:
         with p5:
             st.write("")
             st.write("")
-            btn_scan_trends = st.button("🔥 Scan Breakout Trends", use_container_width=True, type="primary")
+            btn_scan_trends = st.button("🔥 Scan", use_container_width=True, type="primary")
 
         if btn_scan_trends or "cached_us_trends" not in st.session_state:
-            with st.spinner(f"Scraping live Google Trends ({CATEGORIES[sel_cat_key]['label']}, geo={trend_geo}, hours={trend_hours})..."):
+            with st.spinner(f"Scraping trends ({CATEGORIES[sel_cat_key]['label']}, {trend_geo}, {trend_hours}h)..."):
                 scanned_trends = fetch_google_trends_us(geo=trend_geo, hours=trend_hours, sort=trend_sort, category_id=sel_cat_id)
                 st.session_state["cached_us_trends"] = scanned_trends
                 st.session_state["last_trends_scan_ts"] = datetime.datetime.now().strftime("%m/%d/%y, %I:%M %p")
@@ -2238,44 +2231,42 @@ with tab5:
         scan_ts = st.session_state.get("last_trends_scan_ts", "")
 
         if trends_data:
-            st.markdown(f"### Trends · {scan_ts} ({len(trends_data)} Active US Breakouts)")
+            st.markdown(f"### Trends · {scan_ts} ({len(trends_data)} Active)")
 
-            # Topic filter
             niche_col1, niche_col2 = st.columns([2, 1])
             with niche_col1:
-                niche_keyword = st.text_input("Filter by Topic / Keyword (optional):", value="", placeholder="e.g. search keyword, gta, sports, viral, tech", key="trend_topic_filter")
+                niche_keyword = st.text_input("Filter Topic:", value="", placeholder="keyword...", key="trend_topic_filter")
             with niche_col2:
-                video_topic_suffix = st.text_input("YouTube Search Suffix:", value=cat_default_suffix, placeholder="e.g. gameplay, moments, reaction", key="trend_yt_suffix")
+                video_topic_suffix = st.text_input("Suffix:", value=cat_default_suffix, placeholder="e.g. gameplay", key="trend_yt_suffix")
 
             filtered_trends = trends_data
             if niche_keyword.strip():
                 kw_low = niche_keyword.strip().lower()
                 filtered_trends = [t for t in trends_data if kw_low in t["query"].lower()]
-                st.caption(f"Showing {len(filtered_trends)} matching trends for '{niche_keyword}'")
+                st.caption(f"{len(filtered_trends)} matching '{niche_keyword}'")
 
             with st.container(height=650):
                 for idx, tr in enumerate(filtered_trends[:30]):
                     with st.expander(f"#{idx+1} {tr['query'].upper()} — {tr['search_vol_display']} ({tr['started_time']})", expanded=(idx < 2)):
                         c1, c2 = st.columns([2.2, 1.8])
                         with c1:
-                            st.markdown(f"**Search Volume:** `{tr['search_vol_display']}` | **Started:** `{tr['started_time']}` (🟢 Active)")
-                            st.markdown(f"**Trend Breakdown (All):** *{tr['breakdown_display']}*")
-                            st.markdown(f"[🔗 Google Search Link]({tr['search_link']}) | [📈 Google Trends Explore Link]({tr['explore_link']})")
+                            st.markdown(f"**Vol:** `{tr['search_vol_display']}` | **Started:** `{tr['started_time']}` (🟢 Active)")
+                            st.markdown(f"**Breakdown:** *{tr['breakdown_display']}*")
+                            st.markdown(f"[🔗 Search]({tr['search_link']}) | [📈 Explore]({tr['explore_link']})")
 
-                            # In the news links
-                            if st.button("📰 Load Live News Links", key=f"btn_news_{idx}"):
+                            if st.button("📰 Load News", key=f"btn_news_{idx}"):
                                 news_items = get_trend_news_articles(tr['query'], max_articles=3)
                                 tr["news_articles"] = news_items
                                 if news_items:
-                                    st.write("**Top News Headlines:**")
+                                    st.write("**Top News:**")
                                     for ni in news_items:
                                         st.markdown(f"- [{ni['title']}]({ni['url']}) *({ni['source']})*")
                                 else:
-                                    st.caption("No immediate Google News articles found.")
+                                    st.caption("No news articles.")
                         with c2:
-                            st.markdown("##### Content Actions")
-                            if st.button(f"🚀 Produce 6 Reels + 2 Videos (Instant Publish)", key=f"btn_pkg_{idx}", type="primary", use_container_width=True):
-                                with st.spinner(f"Producing & publishing 6 Reels + 2 Landscape Videos for '{tr['query']}'..."):
+                            st.markdown("##### Actions")
+                            if st.button(f"🚀 Produce & Publish", key=f"btn_pkg_{idx}", type="primary", use_container_width=True):
+                                with st.spinner(f"Producing '{tr['query']}'..."):
                                     def manual_update_status(cur_q, stg, stg_name, detail, pct, s_done, v_done):
                                         set_daemon_progress(
                                             active=True,
@@ -2295,50 +2286,49 @@ with tab5:
                                         progress_callback=lambda m: push_daemon_log(f"[{tr['query']}] {m}"),
                                         status_callback=manual_update_status
                                     )
-                                    manual_update_status(tr['query'], 5, "Completed", f"Produced & published {pkg_res['total_rendered']} assets (6 Reels + 2 Videos)", 100, len(pkg_res.get('shorts', [])), len(pkg_res.get('landscapes', [])))
-                                    st.success(f"✓ Successfully produced and published {pkg_res['total_rendered']} assets instantly (PUBLIC) to YouTube Studio!")
+                                    manual_update_status(tr['query'], 5, "Completed", f"Published {pkg_res['total_rendered']} assets", 100, len(pkg_res.get('shorts', [])), len(pkg_res.get('landscapes', [])))
+                                    st.success(f"✓ Published {pkg_res['total_rendered']} assets (Public)!")
                                     st.rerun()
 
-                            if st.button(f"⚡ Clip in Tab 1 (Produce)", key=f"btn_clip_{idx}", use_container_width=True):
-                                with st.spinner(f"Searching YouTube videos for '{tr['query']}'..."):
+                            if st.button(f"⚡ Open in Produce", key=f"btn_clip_{idx}", use_container_width=True):
+                                with st.spinner(f"Searching YouTube..."):
                                     vids = search_trend_source_videos(tr['query'], max_results=3, topic_filter=video_topic_suffix)
                                     if vids:
                                         top_vid = vids[0]
                                         st.session_state["txt_raw_url"] = top_vid["url"]
-                                        st.success(f"Selected: {top_vid['title']} ({top_vid['url']})! Switched to Tab 1.")
+                                        st.success(f"Selected: {top_vid['title']}! Switched.")
                                         st.rerun()
                                     else:
-                                        st.warning("No recent YouTube videos found for this trend.")
+                                        st.warning("No YouTube videos found.")
         else:
-            st.info("No trend data loaded. Click 'Scan Breakout Trends' above to fetch latest US breakout spikes.")
+            st.info("No trends. Click 'Scan' above.")
 
     with col_telemetry:
-        st.markdown("<div class='section-title'>🤖 AUTONOMOUS DAEMON & TELEMETRY</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>DAEMON & TELEMETRY</div>", unsafe_allow_html=True)
 
         d_cfg = load_daemon_config()
         d_running = is_trend_daemon_running()
 
         if d_running:
-            st.success("🟢 **Autonomous Daemon Active:** Polling US breakout trends 24/7. Auto-producing 6 Reels + 2 Videos & publishing instantly (PUBLIC).")
-            if st.button("⏹️ Stop Trend Daemon", use_container_width=True, type="secondary", key="btn_stop_trend_daemon"):
+            st.success("🟢 **Active:** 24/7 US Trends → Public.")
+            if st.button("⏹️ Stop", use_container_width=True, type="secondary", key="btn_stop_trend_daemon"):
                 stop_trend_daemon()
                 st.rerun()
         else:
-            st.warning("⚪ **Autonomous Daemon Idle:** Start background daemon to scan, produce, and publish 24/7.")
-            if st.button("🚀 Start Autonomous Trend Worker", use_container_width=True, type="primary", key="btn_start_trend_daemon"):
+            st.warning("⚪ **Idle:** Daemon stopped.")
+            if st.button("▶️ Start Daemon", use_container_width=True, type="primary", key="btn_start_trend_daemon"):
                 start_trend_daemon()
                 st.rerun()
 
-        with st.expander("⚙️ Daemon Configuration", expanded=False):
-            d_poll = st.number_input("Poll Interval (seconds)", min_value=60, max_value=3600, value=int(d_cfg.get("poll_interval_sec", 300)), step=60, key="cfg_daemon_poll")
-            d_autoup = st.checkbox("Auto-Publish Instantly to YouTube Studio (Public)", value=bool(d_cfg.get("auto_upload", True)), key="cfg_daemon_autoup")
-            if st.button("💾 Save Daemon Settings", key="btn_save_daemon_cfg", use_container_width=True):
+        with st.expander("⚙️ Daemon Config", expanded=False):
+            d_poll = st.number_input("Poll (sec)", min_value=60, max_value=3600, value=int(d_cfg.get("poll_interval_sec", 300)), step=60, key="cfg_daemon_poll")
+            d_autoup = st.checkbox("Publish Public", value=bool(d_cfg.get("auto_upload", True)), key="cfg_daemon_autoup")
+            if st.button("💾 Save", key="btn_save_daemon_cfg", use_container_width=True):
                 d_cfg["poll_interval_sec"] = d_poll
                 d_cfg["auto_upload"] = d_autoup
                 save_daemon_config(d_cfg)
-                st.success("Daemon settings saved!")
+                st.success("Saved")
 
-        # Independent 3-second live telemetry fragment
         @st.fragment(run_every="3s")
         def render_trend_daemon_telemetry_box():
             t_prog = get_daemon_progress()
@@ -2350,32 +2340,32 @@ with tab5:
             t_shorts = t_prog.get("shorts_done", 0)
             t_vids = t_prog.get("videos_done", 0)
 
-            st.markdown("<div class='section-title'>📊 LIVE PRODUCTION TELEMETRY</div>", unsafe_allow_html=True)
+            st.markdown("<div class='section-title'>TELEMETRY</div>", unsafe_allow_html=True)
             if is_t_run or t_pct > 0:
                 st.progress(max(0.0, min(1.0, t_pct / 100.0)), text=f"{t_stage} ({t_pct}%) — {t_detail}")
             else:
-                st.progress(0.0, text="Autonomous Daemon Paused / Idle")
+                st.progress(0.0, text="Paused / Idle")
 
             tm1, tm2 = st.columns(2)
             with tm1:
-                st.metric("Daemon Stage", t_stage, delta=f"{t_pct}%" if (is_t_run or t_pct > 0) else None)
+                st.metric("Stage", t_stage, delta=f"{t_pct}%" if (is_t_run or t_pct > 0) else None)
             with tm2:
                 disp_trend = f"{t_cur_trend[:18]}..." if len(t_cur_trend) > 18 else (t_cur_trend or "Scanning...")
-                st.metric("Active Trend", disp_trend, help=t_cur_trend)
+                st.metric("Trend", disp_trend, help=t_cur_trend)
 
             tm3, tm4 = st.columns(2)
             with tm3:
                 disp_sub = f"{t_detail[:22]}..." if len(t_detail) > 22 else t_detail
-                st.metric("Sub-Step Detail", disp_sub, help=t_detail)
+                st.metric("Sub-Step", disp_sub, help=t_detail)
             with tm4:
-                st.metric("Assets Produced", f"{t_shorts} Reels / {t_vids} Videos", delta=f"{t_shorts+t_vids} total" if (t_shorts+t_vids) > 0 else None)
+                st.metric("Assets", f"{t_shorts} Reels / {t_vids} Vids", delta=f"{t_shorts+t_vids} total" if (t_shorts+t_vids) > 0 else None)
 
-            st.markdown("<div class='section-title'>⚡ LIVE EVENT STREAM (3S REFRESH)</div>", unsafe_allow_html=True)
+            st.markdown("<div class='section-title'>EVENTS</div>", unsafe_allow_html=True)
             t_logs = get_daemon_logs(max_lines=40)
             if t_logs:
                 st.code("\n".join(t_logs[-25:]), language="bash")
             else:
-                st.caption("No autonomous trend events logged yet. Start daemon or produce to stream events.")
+                st.caption("No events.")
 
         render_trend_daemon_telemetry_box()
 
