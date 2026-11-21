@@ -350,50 +350,58 @@ def transcribe_audio_whisper(
     if progress_callback:
         progress_callback(0, 0, f"Batched model loaded in RAM ({threads} threads). Starting turbo transcription...")
     
-    segments, info = batched_model.transcribe(
-        str(audio_path),
-        batch_size=16,
-        word_timestamps=True,
-        vad_filter=True,
-        vad_parameters=dict(min_silence_duration_ms=400)
-    )
+    try:
+        segments, info = batched_model.transcribe(
+            str(audio_path),
+            batch_size=16,
+            word_timestamps=True,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=400)
+        )
 
-    transcript_data = {
-        "language": info.language,
-        "language_probability": info.language_probability,
-        "duration": info.duration,
-        "segments": []
-    }
-
-    for segment in segments:
-        seg_dict = {
-            "start": round(segment.start, 2),
-            "end": round(segment.end, 2),
-            "text": segment.text.strip(),
-            "words": []
+        transcript_data = {
+            "language": info.language,
+            "language_probability": info.language_probability,
+            "duration": info.duration,
+            "segments": []
         }
-        if segment.words:
-            for w in segment.words:
-                seg_dict["words"].append({
-                    "word": w.word.strip(),
-                    "start": round(w.start, 2),
-                    "end": round(w.end, 2),
-                    "probability": round(w.probability, 2)
-                })
-        transcript_data["segments"].append(seg_dict)
 
-        if progress_callback:
-            progress_callback(segment.end, info.duration, segment.text.strip())
+        for segment in segments:
+            seg_dict = {
+                "start": round(segment.start, 2),
+                "end": round(segment.end, 2),
+                "text": segment.text.strip(),
+                "words": []
+            }
+            if segment.words:
+                for w in segment.words:
+                    seg_dict["words"].append({
+                        "word": w.word.strip(),
+                        "start": round(w.start, 2),
+                        "end": round(w.end, 2),
+                        "probability": round(w.probability, 2)
+                    })
+            transcript_data["segments"].append(seg_dict)
 
-    # Save checkpoint immediately
-    with open(output_json_path, "w", encoding="utf-8") as f:
-        json.dump(transcript_data, f, indent=2, ensure_ascii=False)
+            if progress_callback:
+                progress_callback(segment.end, info.duration, segment.text.strip())
 
-    # Sequential RAM Cleanup: strictly delete model and force garbage collection
-    del model
-    gc.collect()
+        # Save checkpoint immediately
+        with open(output_json_path, "w", encoding="utf-8") as f:
+            json.dump(transcript_data, f, indent=2, ensure_ascii=False)
 
-    return transcript_data
+        return transcript_data
+    finally:
+        # Sequential RAM Cleanup: strictly delete batched pipeline + base model and force garbage collection
+        try:
+            del batched_model
+        except Exception:
+            pass
+        try:
+            del model
+        except Exception:
+            pass
+        gc.collect()
 
 
 def expand_source_urls(raw_urls_text: str, max_playlist_items: int = 50) -> List[str]:

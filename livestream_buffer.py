@@ -347,41 +347,44 @@ def process_livestream_slice(
     segments_dir = work_dir / "04_segments"
     segments_dir.mkdir(parents=True, exist_ok=True)
     READY_DIR.mkdir(parents=True, exist_ok=True)
+    has_lock = False
 
-    # Stage 1: Capture HLS stream slice
-    set_livestream_progress(
-        status="buffering",
-        current_step=1,
-        total_steps=5,
-        percentage=10,
-        stage_label="Stage 1/5: Capturing Live HLS",
-        step_detail=f"Buffering {slice_duration}s rolling HLS window from '{title}'...",
-        next_step="Stage 2/5: Audio Extraction & Whisper Transcription",
-        stream_title=title,
-        stream_id=vid_id,
-        channel_name=author
-    )
-    push_live_log(f"🔴 [Stage 1/5] Extracting HLS stream for '{title}' (@{author})...")
-
-    hls_urls = get_live_hls_urls(stream_url)
-    if not hls_urls or not hls_urls.get("video"):
-        push_live_log("Failed to acquire HLS manifest.")
-        return []
-
-    slice_mp4 = work_dir / "live_slice.mp4"
-    captured = capture_rolling_hls_slice(hls_urls, slice_mp4, duration_sec=slice_duration)
-    if not captured or not is_valid_video_file(captured):
-        push_live_log("HLS capture failed or produced invalid container.")
-        return []
-
-    push_live_log(f"✓ [Stage 1/5] Captured {slice_duration}s live slice ({slice_mp4.stat().st_size / 1024 / 1024:.1f} MB).")
-
-    # Stage 2 to Stage 4: Heavy Compute (Whisper AI + Intel QSV) protected by Arbiter Compute Lock
-    push_live_log("Waiting for Compute Lock (P2) to run Whisper AI & QSV Render...")
-    if not acquire_compute_lock("livestream_buffer", PRIORITY_LIVE, f"Live: {title[:25]}", timeout=600.0):
-        push_live_log("Failed to acquire Compute Lock (timeout or system paused). Skipping slice.")
-        return
     try:
+        # Stage 1: Capture HLS stream slice
+        set_livestream_progress(
+            status="buffering",
+            current_step=1,
+            total_steps=5,
+            percentage=10,
+            stage_label="Stage 1/5: Capturing Live HLS",
+            step_detail=f"Buffering {slice_duration}s rolling HLS window from '{title}'...",
+            next_step="Stage 2/5: Audio Extraction & Whisper Transcription",
+            stream_title=title,
+            stream_id=vid_id,
+            channel_name=author
+        )
+        push_live_log(f"🔴 [Stage 1/5] Extracting HLS stream for '{title}' (@{author})...")
+
+        hls_urls = get_live_hls_urls(stream_url)
+        if not hls_urls or not hls_urls.get("video"):
+            push_live_log("Failed to acquire HLS manifest.")
+            return []
+
+        slice_mp4 = work_dir / "live_slice.mp4"
+        captured = capture_rolling_hls_slice(hls_urls, slice_mp4, duration_sec=slice_duration)
+        if not captured or not is_valid_video_file(captured):
+            push_live_log("HLS capture failed or produced invalid container.")
+            return []
+
+        push_live_log(f"✓ [Stage 1/5] Captured {slice_duration}s live slice ({slice_mp4.stat().st_size / 1024 / 1024:.1f} MB).")
+
+        # Stage 2 to Stage 4: Heavy Compute (Whisper AI + Intel QSV) protected by Arbiter Compute Lock
+        push_live_log("Waiting for Compute Lock (P2) to run Whisper AI & QSV Render...")
+        if not acquire_compute_lock("livestream_buffer", PRIORITY_LIVE, f"Live: {title[:25]}", timeout=600.0):
+            push_live_log("Failed to acquire Compute Lock (timeout or system paused). Skipping slice.")
+            return []
+        has_lock = True
+
         # Stage 2: Audio & Transcription
         set_livestream_progress(
             status="transcribing",
@@ -401,7 +404,7 @@ def process_livestream_slice(
             ffmpeg_bin, "-y", "-i", str(slice_mp4),
             "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
             str(audio_wav)
-        ], capture_output=True, text=True)
+        ], capture_output=True, text=True, timeout=45)
 
         # Safeguard: if audio extraction failed, create ambient placeholder audio to prevent crash
         if not audio_wav.exists() or audio_wav.stat().st_size < 1000:
@@ -411,7 +414,7 @@ def process_livestream_slice(
                 "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono",
                 "-t", f"{slice_duration}",
                 str(audio_wav)
-            ], capture_output=True)
+            ], capture_output=True, timeout=30)
 
         transcript = transcribe_audio_whisper(audio_wav, transcript_json)
         if not transcript or not transcript.get("segments"):
@@ -471,7 +474,7 @@ def process_livestream_slice(
                 "-t", f"{dur:.2f}",
                 "-c", "copy",
                 str(raw_seg)
-            ], capture_output=True)
+            ], capture_output=True, timeout=60)
 
             if not is_valid_video_file(raw_seg):
                 return None
@@ -550,52 +553,58 @@ def process_livestream_slice(
                 res_dest = fut.result()
                 if res_dest and res_dest.exists() and res_dest.stat().st_size > 102400:
                     rendered_files.append(res_dest)
-    finally:
-        release_compute_lock("livestream_buffer")
 
-    # Stage 5: Upload / Schedule
-    if auto_upload and rendered_files and is_authenticated():
+        release_compute_lock("livestream_buffer")
+        has_lock = False
+
+        # Stage 5: Upload / Schedule
+        if auto_upload and rendered_files and is_authenticated():
+            set_livestream_progress(
+                status="uploading",
+                current_step=5,
+                total_steps=5,
+                percentage=92,
+                stage_label="Stage 5/5: YouTube Scheduling",
+                step_detail=f"Scheduling {len(rendered_files)} live Shorts across monetization slots on @zelmuesports...",
+                next_step="Completion"
+            )
+            push_live_log(f"📤 [Stage 5/5] Scheduling {len(rendered_files)} Live Shorts to YouTube Studio...")
+            try:
+                results = upload_batch_private(
+                    max_batch_size=len(rendered_files),
+                    auto_schedule=True,
+                    slots_per_day=6,
+                    concurrency=2,
+                    privacy_mode="private",
+                    files_subset=rendered_files,
+                    log_callback=push_live_log
+                )
+                push_live_log(f"✓ [Stage 5/5] Successfully scheduled {len(results)} Live Shorts!")
+            except Exception as e:
+                push_live_log(f"Auto-upload error: {e}")
+
         set_livestream_progress(
-            status="uploading",
+            status="waiting",
             current_step=5,
             total_steps=5,
-            percentage=92,
-            stage_label="Stage 5/5: YouTube Scheduling",
-            step_detail=f"Scheduling {len(rendered_files)} live Shorts across monetization slots on @zelmuesports...",
-            next_step="Completion"
+            percentage=100,
+            stage_label="Live Buffer Complete",
+            step_detail=f"Successfully clipped {len(rendered_files)} Shorts from live stream '{title}'!",
+            next_step="Standby for next live stream polling cycle"
         )
-        push_live_log(f"📤 [Stage 5/5] Scheduling {len(rendered_files)} Live Shorts to YouTube Studio...")
+
+        return rendered_files
+    finally:
+        if has_lock:
+            try:
+                release_compute_lock("livestream_buffer")
+            except Exception:
+                pass
+        # Clean intermediate live slice files to prevent disk leaks
         try:
-            results = upload_batch_private(
-                max_batch_size=len(rendered_files),
-                auto_schedule=True,
-                slots_per_day=6,
-                concurrency=2,
-                privacy_mode="private",
-                files_subset=rendered_files,
-                log_callback=push_live_log
-            )
-            push_live_log(f"✓ [Stage 5/5] Successfully scheduled {len(results)} Live Shorts!")
-        except Exception as e:
-            push_live_log(f"Auto-upload error: {e}")
-
-    set_livestream_progress(
-        status="waiting",
-        current_step=5,
-        total_steps=5,
-        percentage=100,
-        stage_label="Live Buffer Complete",
-        step_detail=f"Successfully clipped {len(rendered_files)} Shorts from live stream '{title}'!",
-        next_step="Standby for next live stream polling cycle"
-    )
-
-    # Clean intermediate live slice files to prevent disk leaks
-    try:
-        shutil.rmtree(work_dir, ignore_errors=True)
-    except Exception:
-        pass
-
-    return rendered_files
+            shutil.rmtree(work_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 def run_livestream_loop():

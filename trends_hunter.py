@@ -158,6 +158,13 @@ def fetch_google_trends_us(
                 "trends_time": snapshot_time_str,
                 "news_articles": []  # Loaded on demand or batch
             })
+
+        # Explicitly sort: recent trends first (highest started_ts first)
+        if sort == "recency":
+            results.sort(key=lambda x: x.get("started_ts", 0), reverse=True)
+        elif sort == "search-volume":
+            results.sort(key=lambda x: x.get("search_vol", 0), reverse=True)
+
         return results if results else fetch_google_trends_rss_fallback(geo=geo)
     except Exception as e:
         print(f"Error fetching Google Trends: {e}")
@@ -165,7 +172,7 @@ def fetch_google_trends_us(
 
 
 def fetch_google_trends_rss_fallback(geo: str = "US") -> List[Dict[str, Any]]:
-    """Emergency fallback: fetches trends from Google Trends official RSS feed."""
+    """Emergency fallback: fetches trends from Google Trends official RSS feed with recency sorting."""
     url = f"https://trends.google.com/trending/rss?geo={geo}"
     req = urllib.request.Request(url, headers={
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -174,6 +181,7 @@ def fetch_google_trends_rss_fallback(geo: str = "US") -> List[Dict[str, Any]]:
         with urllib.request.urlopen(req, timeout=8) as r:
             xml_data = r.read()
         import xml.etree.ElementTree as ET
+        import email.utils
         root = ET.fromstring(xml_data)
         items = root.findall('.//item')
         snapshot_time_str = datetime.datetime.now().strftime("%m/%d/%y, %I:%M %p")
@@ -191,6 +199,15 @@ def fetch_google_trends_rss_fallback(geo: str = "US") -> List[Dict[str, Any]]:
                 if n_title and n_url:
                     news_items.append({"title": n_title, "url": n_url, "source": n_src})
 
+            pub_date_str = it.findtext("pubDate")
+            started_ts = time.time()
+            if pub_date_str:
+                try:
+                    started_ts = email.utils.parsedate_to_datetime(pub_date_str).timestamp()
+                except Exception:
+                    pass
+            started_str = _format_time_ago(started_ts)
+
             q_enc = urllib.parse.quote(title)
             results.append({
                 "query": title,
@@ -198,8 +215,8 @@ def fetch_google_trends_rss_fallback(geo: str = "US") -> List[Dict[str, Any]]:
                 "search_vol_fmt": traffic,
                 "search_vol_display": f"{traffic} (+1,000%)",
                 "growth_pct": "+1,000%",
-                "started_time": "Recent",
-                "started_ts": time.time(),
+                "started_time": started_str,
+                "started_ts": started_ts,
                 "is_active": True,
                 "trend_breakdown": [title],
                 "breakdown_display": title,
@@ -208,6 +225,9 @@ def fetch_google_trends_rss_fallback(geo: str = "US") -> List[Dict[str, Any]]:
                 "trends_time": snapshot_time_str,
                 "news_articles": news_items
             })
+
+        # Recent trends first in RSS fallback
+        results.sort(key=lambda x: x.get("started_ts", 0), reverse=True)
         return results
     except Exception as e:
         print(f"Error fetching Google Trends RSS: {e}")

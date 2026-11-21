@@ -10,6 +10,7 @@ import sys
 import time
 import json
 import re
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -296,93 +297,99 @@ def process_live_stream_autonomous(
     work_dir.mkdir(parents=True, exist_ok=True)
     raw_seg = work_dir / "live_raw.mp4"
 
-    hls_success = capture_live_stream_segment(live_url, raw_seg, duration_sec=clip_duration_sec)
-    if not hls_success or not raw_seg.exists() or raw_seg.stat().st_size < 100000:
-        push_watcher_log(f"Live buffer capture failed for {vid_id}. Retrying next cycle.")
-        set_watcher_progress(active=False, stage=0, stage_name="Idle", step_detail="Live capture timeout. Waiting.", percent=0)
-        return []
+    try:
+        hls_success = capture_live_stream_segment(live_url, raw_seg, duration_sec=clip_duration_sec)
+        if not hls_success or not raw_seg.exists() or raw_seg.stat().st_size < 100000:
+            push_watcher_log(f"Live buffer capture failed for {vid_id}. Retrying next cycle.")
+            set_watcher_progress(active=False, stage=0, stage_name="Idle", step_detail="Live capture timeout. Waiting.", percent=0)
+            return []
 
-    set_watcher_progress(
-        active=True, video_id=vid_id, video_title=title,
-        stage=2, total_stages=5, stage_name="Live Audio Transcription",
-        step_detail="Extracting live audio & generating subtitles (Whisper Turbo)...",
-        next_step="Karaoke subtitle alignment",
-        percent=40, is_live=True
-    )
-    push_watcher_log("Transcribing live segment with Whisper Turbo...")
-    audio_wav = work_dir / "live_audio.wav"
-    ffmpeg_bin = get_ffmpeg_path()
-    subprocess.run([ffmpeg_bin, "-y", "-i", str(raw_seg), "-vn", "-ac", "1", "-ar", "16000", str(audio_wav)], capture_output=True, timeout=20)
-
-    transcript_json = work_dir / "live_transcript.json"
-    transcript = transcribe_audio_whisper(audio_wav, transcript_json)
-    if not transcript or not transcript.get("segments"):
-        transcript = {"segments": [{"words": [{"word": title, "start": 0.5, "end": 3.0}]}]}
-
-    set_watcher_progress(
-        active=True, video_id=vid_id, video_title=title,
-        stage=3, total_stages=5, stage_name="Subtitle Styling",
-        step_detail="Generating NEON karaoke subtitles & hook badge...",
-        next_step="Intel QSV zero-stall hardware rendering",
-        percent=65, is_live=True
-    )
-    words = []
-    for s in transcript.get("segments", []):
-        words.extend(s.get("words", []))
-
-    ass_file = work_dir / "live_subs.ass"
-    style_key = "neon" if "neon" in caption_style.lower() else "clean"
-    generate_karaoke_ass(words, ass_file, clip_start_offset=0.0, style_preset=style_key)
-
-    set_watcher_progress(
-        active=True, video_id=vid_id, video_title=title,
-        stage=4, total_stages=5, stage_name="Hardware GPU Render",
-        step_detail="Rendering 9:16 vertical Short (Intel QSV hardware acceleration)...",
-        next_step="Auto-scheduling to YouTube Studio",
-        percent=85, is_live=True, current_clip=1, total_clips=1
-    )
-    push_watcher_log("Rendering live Short via Intel QSV...")
-    safe_slug = re.sub(r'[^a-zA-Z0-9_-]', '_', title)[:26]
-    dest_name = f"LIVE_{safe_slug}_{int(time.time())}.mp4"
-    READY_DIR.mkdir(parents=True, exist_ok=True)
-    final_dest = READY_DIR / dest_name
-
-    render_mode_a_short(
-        source_video=raw_seg,
-        ass_subtitles=ass_file,
-        output_short_path=final_dest,
-        flagged_profanities=[],
-        split_layout=False,
-        enable_tracking=False,
-        hook_title=f"LIVE: {title[:24]}" if enable_hook_badge else None
-    )
-    push_watcher_log(f"✓ Rendered LIVE short: {final_dest.name}")
-
-    if auto_upload and is_authenticated():
         set_watcher_progress(
             active=True, video_id=vid_id, video_title=title,
-            stage=5, total_stages=5, stage_name="Auto Scheduling",
-            step_detail="Pushing Short to @zelmuesports via upload queue...",
-            next_step="Polling next live stream event",
-            percent=95, is_live=True
+            stage=2, total_stages=5, stage_name="Live Audio Transcription",
+            step_detail="Extracting live audio & generating subtitles (Whisper Turbo)...",
+            next_step="Karaoke subtitle alignment",
+            percent=40, is_live=True
         )
-        try:
-            results = upload_batch_private(
-                max_batch_size=1,
-                auto_schedule=True,
-                slots_per_day=6,
-                concurrency=1
-            )
-            push_watcher_log(f"✓ LIVE Short scheduled to YouTube Studio: {dest_name}")
-        except Exception as e:
-            push_watcher_log(f"Auto-upload error: {e}")
+        push_watcher_log("Transcribing live segment with Whisper Turbo...")
+        audio_wav = work_dir / "live_audio.wav"
+        ffmpeg_bin = get_ffmpeg_path()
+        subprocess.run([ffmpeg_bin, "-y", "-i", str(raw_seg), "-vn", "-ac", "1", "-ar", "16000", str(audio_wav)], capture_output=True, timeout=20)
 
-    set_watcher_progress(
-        active=False, stage=0, stage_name="Idle",
-        step_detail="Live Short complete. Daemon monitoring channels.",
-        next_step="Scan channels", percent=100
-    )
-    return [final_dest]
+        transcript_json = work_dir / "live_transcript.json"
+        transcript = transcribe_audio_whisper(audio_wav, transcript_json)
+        if not transcript or not transcript.get("segments"):
+            transcript = {"segments": [{"words": [{"word": title, "start": 0.5, "end": 3.0}]}]}
+
+        set_watcher_progress(
+            active=True, video_id=vid_id, video_title=title,
+            stage=3, total_stages=5, stage_name="Subtitle Styling",
+            step_detail="Generating NEON karaoke subtitles & hook badge...",
+            next_step="Intel QSV zero-stall hardware rendering",
+            percent=65, is_live=True
+        )
+        words = []
+        for s in transcript.get("segments", []):
+            words.extend(s.get("words", []))
+
+        ass_file = work_dir / "live_subs.ass"
+        style_key = "neon" if "neon" in caption_style.lower() else "clean"
+        generate_karaoke_ass(words, ass_file, clip_start_offset=0.0, style_preset=style_key)
+
+        set_watcher_progress(
+            active=True, video_id=vid_id, video_title=title,
+            stage=4, total_stages=5, stage_name="Hardware GPU Render",
+            step_detail="Rendering 9:16 vertical Short (Intel QSV hardware acceleration)...",
+            next_step="Auto-scheduling to YouTube Studio",
+            percent=85, is_live=True, current_clip=1, total_clips=1
+        )
+        push_watcher_log("Rendering live Short via Intel QSV...")
+        safe_slug = re.sub(r'[^a-zA-Z0-9_-]', '_', title)[:26]
+        dest_name = f"LIVE_{safe_slug}_{int(time.time())}.mp4"
+        READY_DIR.mkdir(parents=True, exist_ok=True)
+        final_dest = READY_DIR / dest_name
+
+        render_mode_a_short(
+            source_video=raw_seg,
+            ass_subtitles=ass_file,
+            output_short_path=final_dest,
+            flagged_profanities=[],
+            split_layout=False,
+            enable_tracking=False,
+            hook_title=f"LIVE: {title[:24]}" if enable_hook_badge else None
+        )
+        push_watcher_log(f"✓ Rendered LIVE short: {final_dest.name}")
+
+        if auto_upload and is_authenticated():
+            set_watcher_progress(
+                active=True, video_id=vid_id, video_title=title,
+                stage=5, total_stages=5, stage_name="Auto Scheduling",
+                step_detail="Pushing Short to @zelmuesports via upload queue...",
+                next_step="Polling next live stream event",
+                percent=95, is_live=True
+            )
+            try:
+                results = upload_batch_private(
+                    max_batch_size=1,
+                    auto_schedule=True,
+                    slots_per_day=6,
+                    concurrency=1
+                )
+                push_watcher_log(f"✓ LIVE Short scheduled to YouTube Studio: {dest_name}")
+            except Exception as e:
+                push_watcher_log(f"Auto-upload error: {e}")
+
+        set_watcher_progress(
+            active=False, stage=0, stage_name="Idle",
+            step_detail="Live Short complete. Daemon monitoring channels.",
+            next_step="Scan channels", percent=100
+        )
+        return [final_dest]
+    finally:
+        try:
+            shutil.rmtree(work_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 def process_video_autonomous(
@@ -414,13 +421,16 @@ def process_video_autonomous(
     segments_dir = work_dir / "04_segments"
     segments_dir.mkdir(parents=True, exist_ok=True)
     READY_DIR.mkdir(parents=True, exist_ok=True)
+    has_lock = False
 
-    # Stage 2 to Stage 4: Protected by Arbiter (Priority 3 - VOD)
-    push_watcher_log("Waiting for Compute Lock (P3) to run dialogue transcription & QSV render...")
-    if not acquire_compute_lock("watcher", PRIORITY_VOD, f"VOD: {title[:25]}", timeout=900.0):
-        push_watcher_log("Failed to acquire Compute Lock (timeout or system paused). Skipping VOD processing.")
-        return
     try:
+        # Stage 2 to Stage 4: Protected by Arbiter (Priority 3 - VOD)
+        push_watcher_log("Waiting for Compute Lock (P3) to run dialogue transcription & QSV render...")
+        if not acquire_compute_lock("watcher", PRIORITY_VOD, f"VOD: {title[:25]}", timeout=900.0):
+            push_watcher_log("Failed to acquire Compute Lock (timeout or system paused). Skipping VOD processing.")
+            return []
+        has_lock = True
+
         # Stage 2: Transcript & Audio
         set_watcher_progress(
             active=True, video_id=vid_id, video_title=title,
@@ -566,36 +576,47 @@ def process_video_autonomous(
                 res_dest = fut.result()
                 if res_dest and res_dest.exists() and res_dest.stat().st_size > 102400:
                     rendered_files.append(res_dest)
-    finally:
+
         release_compute_lock("watcher")
+        has_lock = False
 
-    # Stage 5: Scheduling to Studio
-    if auto_upload and rendered_files and is_authenticated():
-        set_watcher_progress(
-            active=True, video_id=vid_id, video_title=title,
-            stage=5, total_stages=5, stage_name="Auto Scheduling",
-            step_detail=f"Scheduling {len(rendered_files)} new Shorts across peak monetization slots...",
-            next_step="Polling next channel check",
-            percent=95, current_clip=total_cands, total_clips=total_cands
-        )
-        push_watcher_log(f"Scheduling {len(rendered_files)} new Shorts across peak monetization slots...")
-        try:
-            results = upload_batch_private(
-                max_batch_size=len(rendered_files),
-                auto_schedule=True,
-                slots_per_day=6,
-                concurrency=2
+        # Stage 5: Scheduling to Studio
+        if auto_upload and rendered_files and is_authenticated():
+            set_watcher_progress(
+                active=True, video_id=vid_id, video_title=title,
+                stage=5, total_stages=5, stage_name="Auto Scheduling",
+                step_detail=f"Scheduling {len(rendered_files)} new Shorts across peak monetization slots...",
+                next_step="Polling next channel check",
+                percent=95, current_clip=total_cands, total_clips=total_cands
             )
-            push_watcher_log(f"✓ Scheduled {len(results)} Shorts to YouTube Studio (@zelmuesports)!")
-        except Exception as e:
-            push_watcher_log(f"Auto-upload error: {e}")
+            push_watcher_log(f"Scheduling {len(rendered_files)} new Shorts across peak monetization slots...")
+            try:
+                results = upload_batch_private(
+                    max_batch_size=len(rendered_files),
+                    auto_schedule=True,
+                    slots_per_day=6,
+                    concurrency=2
+                )
+                push_watcher_log(f"✓ Scheduled {len(results)} Shorts to YouTube Studio (@zelmuesports)!")
+            except Exception as e:
+                push_watcher_log(f"Auto-upload error: {e}")
 
-    set_watcher_progress(
-        active=False, stage=0, stage_name="Idle",
-        step_detail=f"Completed {len(rendered_files)} Shorts for '{title[:25]}...'. Waiting for next scan cycle.",
-        next_step="Scan channels", percent=100
-    )
-    return rendered_files
+        set_watcher_progress(
+            active=False, stage=0, stage_name="Idle",
+            step_detail=f"Completed {len(rendered_files)} Shorts for '{title[:25]}...'. Waiting for next scan cycle.",
+            next_step="Scan channels", percent=100
+        )
+        return rendered_files
+    finally:
+        if has_lock:
+            try:
+                release_compute_lock("watcher")
+            except Exception:
+                pass
+        try:
+            shutil.rmtree(work_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 def run_watcher_loop():

@@ -2303,7 +2303,7 @@ def render_trend_hunter():
     with p2:
         trend_hours = st.selectbox("Window", [4, 24, 48], index=0, format_func=lambda x: f"Past {x}h", key="trend_hours")
     with p3:
-        trend_sort = st.selectbox("Sort", ["recency", "search-volume"], index=0, format_func=lambda x: "Recency" if x == "recency" else "Volume", key="trend_sort")
+        trend_sort = st.selectbox("Sort", ["recency", "search-volume"], index=0, format_func=lambda x: "Recency (Newest First)" if x == "recency" else "Search Volume", key="trend_sort")
     with p4:
         cat_keys = list(CATEGORIES.keys())
         sel_cat_key = st.selectbox("Category", cat_keys, index=0, format_func=lambda k: CATEGORIES[k]["label"], key="trend_cat")
@@ -2338,9 +2338,15 @@ def render_trend_hunter():
             filtered_trends = [t for t in trends_data if kw_low in t["query"].lower()]
             st.caption(f"{len(filtered_trends)} matching '{niche_keyword}'")
 
+        # Explicitly sort: recent trends first by default
+        if trend_sort == "recency":
+            filtered_trends = sorted(filtered_trends, key=lambda t: t.get("started_ts", 0), reverse=True)
+        elif trend_sort == "search-volume":
+            filtered_trends = sorted(filtered_trends, key=lambda t: t.get("search_vol", 0), reverse=True)
+
         with st.container(height=650):
             for idx, tr in enumerate(filtered_trends[:30]):
-                with st.expander(f"#{idx+1} {tr['query'].upper()} — {tr['search_vol_display']} ({tr['started_time']})", expanded=(idx < 2)):
+                with st.expander(f"#{idx+1} {tr['query'].upper()} — ⏱️ {tr['started_time']} ({tr['search_vol_display']})", expanded=(idx < 2)):
                     c1, c2 = st.columns([2.2, 1.8])
                     with c1:
                         st.markdown(f"**Vol:** `{tr['search_vol_display']}` | **Started:** `{tr['started_time']}` (🟢 Active)")

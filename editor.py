@@ -33,6 +33,41 @@ def get_best_video_encoder() -> List[str]:
     _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-crf", "23", "-threads", "0"]
     return _BEST_ENCODER_CACHE
 
+def run_ffmpeg_with_cpu_fallback(cmd: List[str], timeout: int = 300) -> subprocess.CompletedProcess:
+    """Runs FFmpeg command with timeout; if GPU/QSV encoder initialization fails, retries on CPU libx264."""
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"FFmpeg command timed out after {timeout}s: {' '.join(cmd[:10])}...") from e
+
+    if res.returncode == 0:
+        return res
+
+    # Check if GPU encoder was used in cmd
+    gpu_tokens = ["h264_qsv", "h264_nvenc"]
+    if any(t in cmd for t in gpu_tokens):
+        fallback_cmd = []
+        i = 0
+        while i < len(cmd):
+            if cmd[i] in ["-c:v", "-vcodec"] and i + 1 < len(cmd) and (cmd[i+1] in gpu_tokens):
+                fallback_cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"])
+                i += 2
+                while i < len(cmd) and cmd[i] in ["-global_quality", "-async_depth", "-look_ahead", "-bf", "-cq"]:
+                    i += 2
+            else:
+                fallback_cmd.append(cmd[i])
+                i += 1
+        
+        try:
+            fb_res = subprocess.run(fallback_cmd, capture_output=True, text=True, timeout=timeout)
+            if fb_res.returncode == 0:
+                return fb_res
+            return fb_res
+        except Exception:
+            pass
+
+    return res
+
 def escape_ffmpeg_path(path: Path) -> str:
     r"""
     Windows path escaping for FFmpeg filters (subtitles=, fontfile=).
@@ -336,7 +371,7 @@ def download_video_section(
                     "-c:a", "aac", "-movflags", "+faststart",
                     str(output_mp4_path)
                 ]
-                subprocess.run(conv_cmd, capture_output=True)
+                subprocess.run(conv_cmd, capture_output=True, timeout=180)
 
         if is_valid_video_file(output_mp4_path):
             return output_mp4_path
@@ -571,7 +606,7 @@ def render_mode_a_short(
         str(output_short_path)
     ]
 
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    res = run_ffmpeg_with_cpu_fallback(cmd, timeout=300)
     if res.returncode != 0:
         raise RuntimeError(f"FFmpeg Mode A render failed:\n{res.stderr}")
 
@@ -633,7 +668,7 @@ def render_mode_b_short(
             "-c:a", "aac", "-b:a", "128k",
             str(clip_out)
         ]
-        res = subprocess.run(cmd, capture_output=True, text=True)
+        res = run_ffmpeg_with_cpu_fallback(cmd, timeout=300)
         if res.returncode != 0:
             raise RuntimeError(f"Framed clip {i} failed: {res.stderr}")
         temp_processed.append(clip_out)
@@ -652,7 +687,7 @@ def render_mode_b_short(
         "-c", "copy",
         str(concatenated_raw)
     ]
-    subprocess.run(cat_cmd, capture_output=True)
+    subprocess.run(cat_cmd, capture_output=True, timeout=60)
 
     # Step 3: Mix audio (duck original gameplay audio to 20%, overlay narration at 100%) + optional logo overlay
     has_logo = logo_path and Path(logo_path).exists()
@@ -687,12 +722,7 @@ def render_mode_b_short(
         "-c:a", "aac", "-b:a", "128k",
         str(output_short_path)
     ]
-    mix_res = subprocess.run(mix_cmd, capture_output=True, text=True)
-    if mix_res.returncode != 0:
-        raise RuntimeError(f"Audio mix failed:\n{mix_res.stderr}")
-
-    return output_short_path
-    mix_res = subprocess.run(mix_cmd, capture_output=True, text=True)
+    mix_res = subprocess.run(mix_cmd, capture_output=True, text=True, timeout=120)
     if mix_res.returncode != 0:
         raise RuntimeError(f"Audio mix failed:\n{mix_res.stderr}")
 
