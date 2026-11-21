@@ -7,3 +7,4 @@ google-auth-oauthlib>=1.2.0
 google-auth-httplib2>=0.2.0
 requests>=2.31.0
 av==13.1.0
+instaloader>=4.10.0

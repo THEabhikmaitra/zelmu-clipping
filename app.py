@@ -2659,9 +2659,10 @@ def render_instagram_clipper():
     with top_c1:
         target_uname = st.text_input(
             "Target Instagram Account (@username or Profile URL)",
-            placeholder="@mrbeast or https://www.instagram.com/username/",
+            placeholder="@gta6.only or https://www.instagram.com/username/",
             key="insta_target_uname"
         )
+        st.caption("💡 Supports @username, profile link, or comma/newline-separated direct Reel URLs.")
         scan_limit = st.slider("Scan Search Depth (Max Reels)", min_value=5, max_value=150, value=50, step=5, key="insta_scan_limit")
 
         scan_btn = st.button("🔍 Auto-Calculate All Reels on Account", type="secondary", use_container_width=True, key="btn_scan_insta")
@@ -2692,26 +2693,42 @@ def render_instagram_clipper():
             )
             st.session_state["insta_calc_data"] = calc_data
 
-    # Display Discovery Card
+    # Display Discovery Card or Actionable Error Guidance
     calc_data = st.session_state.get("insta_calc_data")
     if calc_data and calc_data.get("reels"):
         reels_list = calc_data.get("reels", [])
         total_p = calc_data.get("total_account_posts", len(reels_list))
         filt_s = calc_data.get("filtered_sports_count", 0)
+        f_count = calc_data.get("follower_count")
+        f_str = f" | • <b>Followers:</b> <b style='color:#38bdf8;'>{f_count:,}</b>" if f_count else ""
+        fn_str = f" ({calc_data.get('full_name')})" if calc_data.get("full_name") and calc_data.get("full_name") != calc_data.get("account") else ""
 
         st.markdown(
             f"""
             <div style="border:1px solid #0284c7; background:#082f49; border-radius:8px; padding:12px; margin-bottom:12px;">
-                <b style="color:#38bdf8; font-size:1.0rem;">📊 Account Discovery: @{calc_data.get('account')}</b><br>
+                <b style="color:#38bdf8; font-size:1.0rem;">📊 Account Discovery: @{calc_data.get('account')}{fn_str}</b><br>
                 <span style="color:#e0f2fe; font-size:0.85rem;">
                     • <b>Total Account Posts:</b> {total_p} | 
-                    • <b>Discovered Video Reels:</b> <b style="color:#4ade80;">{len(reels_list)}</b> | 
+                    • <b>Discovered Video Reels:</b> <b style="color:#4ade80;">{len(reels_list)}</b>{f_str} | 
                     • <b>Cricket/Sports Filtered:</b> <b style="color:#fbbf24;">{filt_s} excluded</b>
                 </span>
             </div>
             """,
             unsafe_allow_html=True
         )
+    elif calc_data and not calc_data.get("reels"):
+        acc_name = calc_data.get('account', target_uname)
+        st.warning(
+            f"⚠️ **Could not calculate reels for @{acc_name} without authentication.**\n\n"
+            f"Instagram rate-limits unauthenticated profile requests (HTTP 429). "
+            f"To unlock full account scanning:\n"
+            f"1. Open [instagram.com](https://www.instagram.com) in your browser.\n"
+            f"2. Press **F12** -> **Application** -> **Cookies** -> `https://www.instagram.com`.\n"
+            f"3. Copy the value of the `sessionid` cookie.\n"
+            f"4. Paste it in the **Instagram Session ID** field on the right and click **Save SessionID**.\n\n"
+            f"*(Alternatively: paste individual Reel URLs directly into the target input box separated by commas or newlines.)*"
+        )
+
 
     # 2. Crawler State & Live Sequential Progress
     st.markdown("<div class='section-title'>1-BY-1 SEQUENTIAL INGESTION DASHBOARD</div>", unsafe_allow_html=True)

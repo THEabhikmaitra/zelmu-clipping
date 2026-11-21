@@ -20,6 +20,11 @@ import requests
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
+try:
+    import instaloader
+except ImportError:
+    instaloader = None
+
 from transcriber import get_ffmpeg_path, get_ytdlp_cmd
 from analyzer import query_ollama_json
 from safety import is_cricket_or_broadcast_sports
@@ -148,6 +153,88 @@ def normalize_instagram_target(target: str) -> Tuple[str, str]:
         return "profile", f"https://www.instagram.com/{uname}/"
 
 
+def _find_video_url_in_dict(obj: Any) -> Optional[str]:
+    """Recursively searches for video_versions or video_url in nested Instagram JSON."""
+    if isinstance(obj, dict):
+        if "video_versions" in obj and isinstance(obj["video_versions"], list) and obj["video_versions"]:
+            v_url = obj["video_versions"][0].get("url")
+            if v_url:
+                return v_url
+        if "video_url" in obj and isinstance(obj["video_url"], str):
+            return obj["video_url"]
+        for v in obj.values():
+            found = _find_video_url_in_dict(v)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _find_video_url_in_dict(item)
+            if found:
+                return found
+    return None
+
+
+def _find_timeline_edges(obj: Any) -> List[Dict[str, Any]]:
+    """Recursively searches for polaris_ordered_timeline_connection or edge_owner_to_timeline_media edges."""
+    if isinstance(obj, dict):
+        if "polaris_ordered_timeline_connection" in obj:
+            conn = obj["polaris_ordered_timeline_connection"]
+            if isinstance(conn, dict) and "edges" in conn and conn["edges"]:
+                return conn["edges"]
+        if "edge_owner_to_timeline_media" in obj:
+            conn = obj["edge_owner_to_timeline_media"]
+            if isinstance(conn, dict) and "edges" in conn and conn["edges"]:
+                return conn["edges"]
+        for v in obj.values():
+            found = _find_timeline_edges(v)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _find_timeline_edges(item)
+            if found:
+                return found
+    return []
+
+
+def download_reel_direct_cdn(url_or_shortcode: str, output_path: Path, session_id: Optional[str] = None) -> bool:
+    """Downloads an Instagram Reel MP4 directly from Meta CDN via embedded page data."""
+    if not instaloader:
+        return False
+    clean = url_or_shortcode.strip().rstrip('/')
+    m = re.search(r'/(?:reel|p)/([A-Za-z0-9_-]+)', clean)
+    shortcode = m.group(1) if m else clean.split('/')[-1]
+
+    try:
+        L = instaloader.Instaloader()
+        sess_id = session_id or get_session_cookie()
+        if sess_id:
+            L.context.session.cookies.set("sessionid", sess_id, domain=".instagram.com")
+
+        for prefix in [f"reel/{shortcode}/", f"p/{shortcode}/"]:
+            try:
+                page_data = L.context.get_page_data(prefix)
+                v_url = _find_video_url_in_dict(page_data)
+                if v_url:
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    }
+                    with requests.get(v_url, headers=headers, stream=True, timeout=25) as r:
+                        r.raise_for_status()
+                        with open(output_path, "wb") as f:
+                            for chunk in r.iter_content(chunk_size=65536):
+                                if chunk:
+                                    f.write(chunk)
+                    if is_valid_video_file(output_path):
+                        return True
+            except Exception as e:
+                print(f"[DirectCDN] Prefix {prefix} check notice: {e}")
+    except Exception as err:
+        print(f"[DirectCDN] Extraction error: {err}")
+    return False
+
+
 def scan_and_calculate_account_reels(
     target: str,
     cookies_path: Optional[str] = None,
@@ -155,18 +242,140 @@ def scan_and_calculate_account_reels(
     limit: int = 50
 ) -> Dict[str, Any]:
     """
-    Auto-calculates total reels published by target account.
+    Auto-calculates total reels published by target account or direct Reel URL batch.
     Enumerates video reel items and filters out cricket/broadcast sports risks.
     """
-    t_type, target_url = normalize_instagram_target(target)
-    clean_uname = target.lstrip("@").strip().split("/")[-1] if t_type == "profile" else "custom_batch"
+    clean_target = target.strip()
     sess_id = session_id or get_session_cookie()
+
+    # Check if target is a list of direct Reel URLs (newlines or commas)
+    direct_urls = [u.strip() for u in re.split(r'[\r\n,]+', clean_target) if u.strip() and ("/reel/" in u or "/p/" in u)]
+    if direct_urls:
+        reels = []
+        filtered_sports = 0
+        for u in direct_urls[:limit]:
+            m = re.search(r'/(?:reel|p)/([A-Za-z0-9_-]+)', u)
+            s_id = m.group(1) if m else u.rstrip("/").split("/")[-1]
+            reels.append({
+                "id": s_id,
+                "url": f"https://www.instagram.com/reel/{s_id}/",
+                "caption": f"Instagram Reel {s_id}",
+                "uploader": "creator",
+                "duration": 30.0
+            })
+        return {
+            "account": "direct_batch",
+            "full_name": "Direct Batch URLs",
+            "follower_count": None,
+            "total_account_posts": len(reels),
+            "discovered_reels_count": len(reels),
+            "reels": reels,
+            "filtered_sports_count": filtered_sports,
+            "method": "direct_urls",
+            "status": "ready"
+        }
+
+    t_type, target_url = normalize_instagram_target(clean_target)
+    clean_uname = clean_target.lstrip("@").strip().split("/")[-1] if t_type == "profile" else "custom_batch"
 
     reels = []
     total_posts = 0
+    follower_count = None
+    full_name = None
     filtered_sports = 0
 
-    # Method 1: Instagram GraphQL Web Profile API
+    # Method 1: Instaloader Embedded GraphQL Extraction (High success, bypasses unauthenticated blocks)
+    if instaloader and t_type == "profile":
+        try:
+            L = instaloader.Instaloader()
+            if sess_id:
+                L.context.session.cookies.set("sessionid", sess_id, domain=".instagram.com")
+
+            page_data = L.context.get_page_data(f"{clean_uname}/")
+            for item in page_data:
+                u_info = item.get("xig_user_by_username")
+                if isinstance(u_info, dict):
+                    if not full_name:
+                        full_name = u_info.get("full_name") or u_info.get("username")
+                    if follower_count is None and u_info.get("follower_count") is not None:
+                        follower_count = u_info.get("follower_count")
+                    if not total_posts and u_info.get("all_media_count") is not None:
+                        total_posts = u_info.get("all_media_count")
+
+            edges = _find_timeline_edges(page_data)
+            for e in edges:
+                node = e.get("node", {})
+                is_video = (
+                    node.get("__typename") == "XIGPolarisVideoMedia"
+                    or node.get("media_type") == 2
+                    or node.get("product_type") == "clips"
+                    or bool(node.get("is_video"))
+                )
+                if is_video:
+                    shortcode = node.get("code") or node.get("shortcode")
+                    if not shortcode:
+                        continue
+                    cap_obj = node.get("caption")
+                    cap = cap_obj.get("text", "") if isinstance(cap_obj, dict) else str(cap_obj or "")
+
+                    if is_cricket_or_broadcast_sports(cap):
+                        filtered_sports += 1
+                        continue
+
+                    reels.append({
+                        "id": shortcode,
+                        "url": f"https://www.instagram.com/reel/{shortcode}/",
+                        "caption": cap,
+                        "uploader": clean_uname,
+                        "duration": float(node.get("video_duration") or 30.0)
+                    })
+                    if len(reels) >= limit:
+                        break
+
+            # If user has provided session_id and we need more reels beyond initial page
+            if sess_id and len(reels) < limit:
+                try:
+                    profile = instaloader.Profile.from_username(L.context, clean_uname)
+                    if not follower_count:
+                        follower_count = profile.followers
+                    if not total_posts:
+                        total_posts = profile.mediacount
+                    seen_ids = {r["id"] for r in reels}
+                    for post in profile.get_posts():
+                        if post.is_video and post.shortcode not in seen_ids:
+                            cap = post.caption or ""
+                            if is_cricket_or_broadcast_sports(cap):
+                                filtered_sports += 1
+                                continue
+                            reels.append({
+                                "id": post.shortcode,
+                                "url": f"https://www.instagram.com/reel/{post.shortcode}/",
+                                "caption": cap,
+                                "uploader": clean_uname,
+                                "duration": float(post.video_duration or 30.0)
+                            })
+                            seen_ids.add(post.shortcode)
+                            if len(reels) >= limit:
+                                break
+                except Exception as ex:
+                    print(f"[InstaScraper] Instaloader profile deep iteration notice: {ex}")
+
+            if reels:
+                return {
+                    "account": clean_uname,
+                    "full_name": full_name or clean_uname,
+                    "follower_count": follower_count,
+                    "total_account_posts": total_posts or len(reels),
+                    "discovered_reels_count": len(reels),
+                    "reels": reels,
+                    "filtered_sports_count": filtered_sports,
+                    "method": "instaloader_embedded",
+                    "status": "ready"
+                }
+        except Exception as e:
+            print(f"[InstaScraper] Instaloader embedded extraction notice: {e}")
+
+    # Method 2: Instagram GraphQL Web Profile API
     if t_type == "profile":
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -183,11 +392,12 @@ def scan_and_calculate_account_reels(
                 user_info = data.get("data", {}).get("user", {})
                 edge_owner = user_info.get("edge_owner_to_timeline_media", {})
                 total_posts = edge_owner.get("count", 0)
+                follower_count = user_info.get("edge_followed_by", {}).get("count")
+                full_name = user_info.get("full_name") or clean_uname
                 edges = edge_owner.get("edges", [])
 
                 for e in edges:
                     node = e.get("node", {})
-                    # Reels/Videos only
                     if node.get("is_video"):
                         shortcode = node.get("shortcode")
                         caption_edges = node.get("edge_media_to_caption", {}).get("edges", [])
@@ -210,7 +420,9 @@ def scan_and_calculate_account_reels(
                 if reels:
                     return {
                         "account": clean_uname,
-                        "total_account_posts": total_posts,
+                        "full_name": full_name or clean_uname,
+                        "follower_count": follower_count,
+                        "total_account_posts": total_posts or len(reels),
                         "discovered_reels_count": len(reels),
                         "reels": reels,
                         "filtered_sports_count": filtered_sports,
@@ -220,7 +432,7 @@ def scan_and_calculate_account_reels(
         except Exception as e:
             print(f"[InstaScraper] Web API check notice: {e}")
 
-    # Method 2: yt-dlp metadata extractor fallback
+    # Method 3: yt-dlp metadata extractor fallback
     temp_cookie_p = None
     if sess_id and not cookies_path:
         temp_cookie_p = WORKSPACE_DIR / "temp_insta_cookies.txt"
@@ -273,12 +485,16 @@ def scan_and_calculate_account_reels(
 
     return {
         "account": clean_uname,
+        "full_name": full_name or clean_uname,
+        "follower_count": follower_count,
         "total_account_posts": total_posts or len(reels),
         "discovered_reels_count": len(reels),
         "reels": reels,
         "filtered_sports_count": filtered_sports,
-        "method": "yt_dlp",
-        "status": "ready" if reels else "empty"
+        "method": "yt_dlp" if reels else "none",
+        "status": "ready" if reels else "empty",
+        "error_reason": "rate_limited_or_auth_required" if not reels else None,
+        "error_message": f"Instagram blocked unauthenticated profile access (HTTP 429). Session cookie required for @{clean_uname}." if not reels else None
     }
 
 
@@ -331,10 +547,15 @@ def download_instagram_video(
     output_mp4: Path,
     cookies_path: Optional[str] = None
 ) -> Optional[Path]:
-    """Downloads an Instagram Reel MP4 directly via yt-dlp."""
+    """Downloads an Instagram Reel MP4 with Direct CDN primary and yt-dlp fallback."""
     output_mp4.parent.mkdir(parents=True, exist_ok=True)
-    part_mp4 = output_mp4.with_suffix(".part.mp4")
 
+    # 1. Direct CDN Stream Download (Fastest, zero rate-limit)
+    if download_reel_direct_cdn(url, output_mp4):
+        return output_mp4
+
+    # 2. yt-dlp fallback
+    part_mp4 = output_mp4.with_suffix(".part.mp4")
     cmd = [
         *get_ytdlp_cmd(),
         "-f", "bestvideo+bestaudio/best[ext=mp4]/best",
@@ -360,6 +581,7 @@ def download_instagram_video(
         if part_mp4.exists():
             part_mp4.unlink()
     return None
+
 
 
 def process_instagram_reel(
