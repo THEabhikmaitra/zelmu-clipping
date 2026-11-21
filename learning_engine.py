@@ -461,6 +461,42 @@ def audit_quality_and_seo(
             "detail": "Frame-0 curiosity hook, 3.2s dynamic punch-in zoom, and seamless loop replay enabled."
         })
 
+    # 9. ContentRewards Campaign Compliance Check
+    try:
+        from campaigns_manager import get_active_campaign
+        active_camp = get_active_campaign()
+    except Exception:
+        active_camp = None
+
+    if active_camp:
+        c_name = active_camp.get("name", "Campaign")
+        req_tags = [t.lower() for t in active_camp.get("mandatory_hashtags", "").split() if t.startswith("#")]
+        missing_tags = [t for t in req_tags if t not in title.lower() and t not in description.lower()]
+
+        if missing_tags:
+            checks.append({
+                "name": "ContentRewards Campaign Compliance",
+                "passed": False,
+                "badge": f"⚠️ MISSING TAGS: {', '.join(missing_tags)}",
+                "detail": f"Campaign '{c_name}' requires mandatory hashtags: {active_camp.get('mandatory_hashtags')}. Add them to qualify for payout."
+            })
+            score -= 20
+            suggestions.append(f"Add required campaign hashtags: {active_camp.get('mandatory_hashtags')}")
+        else:
+            checks.append({
+                "name": "ContentRewards Campaign Compliance",
+                "passed": True,
+                "badge": f"💰 CAMPAIGN COMPLIANT (${active_camp.get('cpm_rate', 3.0):.2f} CPM)",
+                "detail": f"Matches all rules for '{c_name}'. Approved for ContentRewards payout submission."
+            })
+    else:
+        checks.append({
+            "name": "ContentRewards Campaign Compliance",
+            "passed": True,
+            "badge": "🟢 INDEPENDENT CLIP",
+            "detail": "No active sponsor campaign restrictions. Full creative freedom."
+        })
+
     score = max(0, min(100, score))
     passed_overall = score >= 80
 

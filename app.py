@@ -83,6 +83,15 @@ from instagram_scraper import (
     save_session_cookie,
     get_session_cookie
 )
+from campaigns_manager import (
+    load_campaigns_db,
+    save_campaign,
+    delete_campaign,
+    get_active_campaign,
+    set_active_campaign,
+    calculate_campaign_roi,
+    generate_campaign_scripts
+)
 from uploader import (
     upload_batch_private,
     upload_single_clip_direct,
@@ -2003,8 +2012,8 @@ def render_upload_stage():
                 u_status.success(f"✓ Successfully processed {len(successful)} clips on YouTube ({mode_label})!")
                 for r in successful:
                     v_title = r.get("title") or "YouTube Clip"
-                    v_url = r.get("studio_url") or (f"https://studio.youtube.com/video/{r['video_id']}/edit" if r.get("video_id") else "https://studio.youtube.com")
-                    sched_note = f" (Scheduled: `{r['publish_at']}`)" if r.get("publish_at") else f" ({r.get('privacy_status', target_privacy).upper()})"
+                    v_url = r.get("studio_url") or (f"https://studio.youtube.com/video/{r.get('video_id')}/edit" if r.get("video_id") else "https://studio.youtube.com")
+                    sched_note = f" (Scheduled: `{r.get('publish_at')}`)" if r.get("publish_at") else f" ({r.get('privacy_status', target_privacy).upper()})"
                     st.markdown(f"- **{v_title}**{sched_note} &rarr; [Edit in YouTube Studio]({v_url})")
 
             if errors:
@@ -2794,6 +2803,199 @@ def render_instagram_clipper():
         )
 
 
+def render_campaign_clipper():
+    st.markdown("<div class='section-title'>STAGE 2: CONTENTREWARDS CAMPAIGN CLIPPER</div>", unsafe_allow_html=True)
+    st.caption("Campaign-driven clipping engine: Auto-adapts script hooks and descriptions to the campaign brief, target audience, and target country, with live ROI & revenue tracking.")
+
+    camp_db = load_campaigns_db()
+    campaigns = camp_db.get("campaigns", {})
+    active_camp = get_active_campaign()
+
+    # Top Campaign Selector & Creator
+    top_c1, top_c2 = st.columns([1.6, 1.2], gap="medium")
+
+    with top_c1:
+        camp_options = {c["name"]: cid for cid, c in campaigns.items()} if campaigns else {}
+        if camp_options:
+            cur_active_name = active_camp.get("name") if active_camp else list(camp_options.keys())[0]
+            selected_camp_name = st.selectbox("Select Active ContentRewards Campaign", list(camp_options.keys()), index=list(camp_options.keys()).index(cur_active_name) if cur_active_name in camp_options else 0, key="sel_active_campaign")
+            if selected_camp_name and camp_options[selected_camp_name] != camp_db.get("active_campaign_id"):
+                set_active_campaign(camp_options[selected_camp_name])
+                st.rerun()
+
+        with st.expander("➕ Create New ContentRewards Campaign Profile", expanded=(not camp_options)):
+            with st.form("form_new_campaign"):
+                new_c_name = st.text_input("Campaign Name", placeholder="e.g. DraftKings Podcast Clipper")
+                n_col1, n_col2 = st.columns(2)
+                with n_col1:
+                    new_cpm = st.number_input("Payout Rate ($ / 1,000 views)", min_value=0.5, max_value=50.0, value=3.5, step=0.5)
+                    new_country = st.selectbox("Target Country / Geo", ["United States (US)", "United Kingdom (UK)", "Canada (CA)", "Australia (AU)", "Global / Worldwide"], index=0)
+                with n_col2:
+                    new_goal = st.number_input("Revenue Payout Cap / Goal ($)", min_value=50.0, max_value=10000.0, value=500.0, step=50.0)
+                    new_audience = st.selectbox("Target Audience", ["Gamers & Esports", "Tech & AI Enthusiasts", "Crypto & Finance", "Pop Culture & Comedy", "Sports & Fitness", "General Viral"], index=0)
+
+                new_brief = st.text_area("Campaign Brief & Instructions", placeholder="e.g. Highlight shocking podcast moments, debates, and tech updates. Mention sponsor code in comments.")
+                new_tags = st.text_input("Mandatory Hashtags", placeholder="#DraftKings #Sponsor #Shorts")
+                new_link = st.text_input("Sponsor Link / Promo Code", placeholder="https://draftkings.com/promo/zelmu (Code: ZELMU)")
+                new_src = st.text_input("Default Source Footage URL", placeholder="https://www.youtube.com/watch?v=... or local MP4 path")
+
+                if st.form_submit_button("💾 Save Campaign Profile", type="primary", use_container_width=True):
+                    if new_c_name.strip():
+                        new_id = save_campaign({
+                            "name": new_c_name.strip(),
+                            "cpm_rate": new_cpm,
+                            "revenue_goal": new_goal,
+                            "target_country": new_country,
+                            "target_audience": new_audience,
+                            "description_brief": new_brief,
+                            "mandatory_hashtags": new_tags,
+                            "sponsor_link": new_link,
+                            "source_footage_url": new_src,
+                            "status": "active"
+                        })
+                        st.success(f"✓ Campaign '{new_c_name}' created and set as active!")
+                        st.rerun()
+
+    with top_c2:
+        if active_camp:
+            st.markdown("<div class='section-title'>CAMPAIGN KPI GOALS</div>", unsafe_allow_html=True)
+            cpm_r = float(active_camp.get("cpm_rate", 3.5))
+            rev_g = float(active_camp.get("revenue_goal", 500.0))
+            t_views = int((rev_g / max(0.1, cpm_r)) * 1000)
+
+            st.metric("Revenue Cap / Goal", f"${rev_g:,.2f}", delta=f"${cpm_r:.2f} CPM")
+            st.metric("Target Views Needed", f"{t_views:,} views")
+            st.caption(f"**Target Geo:** {active_camp.get('target_country', 'US')} | **Audience:** {active_camp.get('target_audience', 'Gamers')}")
+
+            if st.button("🗑️ Delete This Campaign", type="secondary", use_container_width=True, key=f"btn_del_camp_{active_camp.get('id')}"):
+                delete_campaign(active_camp.get("id"))
+                st.warning("Campaign deleted.")
+                st.rerun()
+
+    if not active_camp:
+        st.info("No active campaign configured. Create a campaign profile above to begin campaign-driven clipping.")
+        return
+
+    # Campaign Clipping Engine
+    st.markdown("<div class='section-title'>⚡ 1-CLICK CAMPAIGN CLIPPING GENERATOR</div>", unsafe_allow_html=True)
+    c_src_url = st.text_input("Source Video / Podcast URL for this Campaign", value=active_camp.get("source_footage_url", ""), placeholder="https://www.youtube.com/watch?v=... or Channel URL", key="camp_src_url_input")
+
+    proc_c1, proc_c2 = st.columns([1.5, 1])
+    with proc_c1:
+        st.info(f"🎯 **Campaign Brief Active:** Generating 6 Shorts matching `{active_camp.get('target_audience')}` audience in `{active_camp.get('target_country')}` with `{active_camp.get('mandatory_hashtags')}`.")
+    with proc_c2:
+        if st.button("🚀 Generate 6 Campaign Shorts", type="primary", use_container_width=True, key="btn_gen_camp_shorts"):
+            if not c_src_url.strip():
+                st.error("Please provide a valid source video URL.")
+                return
+
+            p_box = st.empty()
+            p_bar = st.progress(0.0)
+            p_box.info("🧠 Analyzing campaign brief, target audience, and generating AI scripts...")
+
+            scripts = generate_campaign_scripts(active_camp, source_title=active_camp.get("name", "Campaign"))
+            p_bar.progress(0.25)
+            p_box.info(f"✓ Generated {len(scripts)} scripts. Sourcing visual footage...")
+
+            work_dir = Path("workspace") / f"camp_{int(time.time())}"
+            work_dir.mkdir(parents=True, exist_ok=True)
+            raw_vid = work_dir / "raw_source.mp4"
+
+            try:
+                from editor import download_video_section
+                download_video_section(c_src_url.strip(), start_sec=30.0, end_sec=85.0, output_mp4_path=raw_vid)
+            except Exception:
+                pass
+
+            from trend_producer import create_solid_color_broll
+            if not raw_vid.exists() or raw_vid.stat().st_size < 100000:
+                raw_vid = create_solid_color_broll(work_dir / "broll.mp4", duration=45.0, is_vertical=True)
+
+            p_bar.progress(0.50)
+            p_box.info("🎬 Rendering 6 campaign-branded vertical Shorts with karaoke captions & 3.2s zoom...")
+
+            from editor import generate_piper_tts, generate_karaoke_ass, render_mode_a_short
+            from trend_producer import extract_whisper_word_timestamps, get_audio_duration
+
+            ready_dir = Path("ready_to_upload")
+            ready_dir.mkdir(parents=True, exist_ok=True)
+            camp_id = active_camp.get("id")
+            ts = int(time.time())
+
+            produced_clips = []
+            for idx, sc in enumerate(scripts):
+                s_title = sc.get("title", f"Campaign Clip {idx+1}")
+                s_hook = sc.get("hook", "⚡ SPONSOR ALERT")
+                s_script = sc.get("script", "")
+
+                wav_p = work_dir / f"tts_{idx}.wav"
+                generate_piper_tts(s_script, wav_p)
+                dur = get_audio_duration(wav_p)
+
+                words = extract_whisper_word_timestamps(wav_p, s_script, dur, work_dir, idx)
+                ass_p = work_dir / f"subs_{idx}.ass"
+                generate_karaoke_ass(words, ass_p, style_preset="neon")
+
+                final_mp4 = ready_dir / f"Short_Camp_{camp_id}_{idx+1}_{ts}.mp4"
+
+                broll_offset = (idx * 9) % 40
+                cut_vis = work_dir / f"vis_{idx}.mp4"
+                subprocess.run([
+                    "ffmpeg", "-y",
+                    "-ss", f"{broll_offset:.1f}",
+                    "-stream_loop", "-1",
+                    "-i", str(raw_vid),
+                    "-i", str(wav_p),
+                    "-t", f"{dur:.2f}",
+                    "-map", "0:v:0",
+                    "-map", "1:a:0",
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    str(cut_vis)
+                ], capture_output=True)
+
+                render_mode_a_short(
+                    source_video=cut_vis,
+                    ass_subtitles=ass_p,
+                    output_short_path=final_mp4,
+                    flagged_profanities=[],
+                    split_layout=False,
+                    enable_tracking=False,
+                    hook_title=s_hook,
+                    enable_pacing_zoom=True,
+                    enable_anti_content_id=True,
+                    enable_music_ducking=False,
+                    enable_sfx=True
+                )
+
+                if final_mp4.exists():
+                    produced_clips.append(final_mp4)
+                    sidecar_p = final_mp4.with_suffix(".json")
+                    with open(sidecar_p, "w", encoding="utf-8") as sf:
+                        json.dump({
+                            "title": s_title[:70],
+                            "description": sc.get("description", f"🔥 Sponsored breakdown\n\n{active_camp.get('mandatory_hashtags')}"),
+                            "tags": [t.strip("#") for t in active_camp.get("mandatory_hashtags", "").split() if t.strip()] + ["Shorts", "Trending"],
+                            "category_id": "24",
+                            "privacy_status": "public",
+                            "approved": False,
+                            "stage": "pending_quality_review",
+                            "source": "contentrewards_campaign",
+                            "campaign_id": camp_id,
+                            "campaign_name": active_camp.get("name"),
+                            "cpm_rate": active_camp.get("cpm_rate"),
+                            "created_at": time.time()
+                        }, sf, indent=2, ensure_ascii=False)
+
+                p_bar.progress(0.50 + ((idx+1) / len(scripts)) * 0.50)
+
+            p_box.success(f"✓ Successfully generated {len(produced_clips)} Campaign Shorts! All passed to Stage 3 Quality Review.")
+            for cp in produced_clips:
+                st.markdown(f"- 📦 `{cp.name}` &rarr; **Ready for Stage 3 Quality Check**")
+            if st.button("➡️ Review in Stage 3 Quality Check", type="primary", key="btn_go_to_stage3_from_camp"):
+                st.rerun()
+
+
 # Instant Client-Side Tabs (Positioned inside Top Fixed Navbar beside logo)
 tab_mc, tab_research, tab_prod, tab_quality, tab_upload, tab_analytics, tab_learning = st.tabs([
     "🎛️ Mission",
@@ -2827,12 +3029,13 @@ with tab_research:
         render_learned_topics()
 
 with tab_prod:
-    sub_p1, sub_p2, sub_p3, sub_p4, sub_p5 = st.tabs([
+    sub_p1, sub_p2, sub_p3, sub_p4, sub_p5, sub_p6 = st.tabs([
         "⚡ Trend Factory (P1)",
         "🔴 Live Buffer (P2)",
         "🤖 VOD Watcher (P3)",
         "🎬 Manual Clipper",
-        "📸 Insta Clipper"
+        "📸 Insta Clipper",
+        "🎯 Campaign Clipper (ContentRewards)"
     ])
     with sub_p1:
         render_trend_factory()
@@ -2844,6 +3047,8 @@ with tab_prod:
         render_manual_clipper()
     with sub_p5:
         render_instagram_clipper()
+    with sub_p6:
+        render_campaign_clipper()
 
 with tab_quality:
     render_quality_seo_stage(READY_DIR)

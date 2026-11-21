@@ -1215,17 +1215,31 @@ def upload_batch_private(
                     # Retry uploading with the rotated token/client on target channel
                     next_tok = slots_pool[active_slot_idx]["token_path"]
                     yt_rotated = get_authenticated_service(next_tok)
-                    return upload_single_video(
-                        yt_rotated,
-                        video_path,
-                        title=title_val,
-                        description=desc_val,
-                        tags=tags_val,
-                        category_id=cat_val,
-                        publish_at=target_pub_time,
-                        privacy_status=privacy_val,
-                        chunk_callback=on_chunk
-                    )
+                    try:
+                        return upload_single_video(
+                            yt_rotated,
+                            video_path,
+                            title=title_val,
+                            description=desc_val,
+                            tags=tags_val,
+                            category_id=cat_val,
+                            publish_at=target_pub_time,
+                            privacy_status=privacy_val,
+                            chunk_callback=on_chunk
+                        )
+                    except Exception as retry_err:
+                        quota_hit = True
+                        slot_cnt = len(slots_pool) if slots_pool else 1
+                        msg = f"Daily YouTube upload quota reached across configured slot(s) (retry error: {retry_err}) at clip #{idx+1}. Remaining clips safely saved in ready_to_upload/."
+                        if log_callback:
+                            log_callback(f"⚠️ {msg}")
+                        return {
+                            "error": msg,
+                            "video_id": None,
+                            "title": title_val,
+                            "file_name": file_name,
+                            "studio_url": ""
+                        }
                 else:
                     quota_hit = True
                     slot_cnt = len(slots_pool) if slots_pool else 1

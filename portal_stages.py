@@ -221,7 +221,7 @@ def render_quality_seo_stage(ready_dir: Path):
             st.rerun()
 
     with col_inspect:
-        st.markdown("<div class='section-title'>8-POINT MONETIZATION, SEO & LOOP AUDIT</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>9-POINT MONETIZATION, SEO & CAMPAIGN AUDIT</div>", unsafe_allow_html=True)
 
         cur_title = metadata.get("title", sel_file.stem)
         cur_desc = metadata.get("description", "")
@@ -398,6 +398,53 @@ def render_analytics_stage():
             "Studio Link": st.column_config.LinkColumn("Studio", display_text="Edit ↗️")
         }
     )
+
+    # ContentRewards Campaign ROI & Revenue Tracker
+    try:
+        from campaigns_manager import get_active_campaign, calculate_campaign_roi
+        active_camp = get_active_campaign()
+    except Exception:
+        active_camp = None
+
+    if active_camp:
+        st.markdown("<div class='section-title'>🎯 CONTENTREWARDS CAMPAIGN REVENUE & ROI TRACKER</div>", unsafe_allow_html=True)
+        roi = calculate_campaign_roi(active_camp.get("id", ""))
+        cpm_val = roi.get("cpm_rate", 3.0)
+        goal_val = roi.get("revenue_goal", 500.0)
+        earned_val = roi.get("realized_earnings", 0.0)
+        c_views = roi.get("total_views", 0)
+        c_pct = roi.get("goal_progress_pct", 0.0)
+        v_need = roi.get("views_needed", 0)
+
+        r_c1, r_c2, r_c3, r_c4 = st.columns(4)
+        with r_c1:
+            st.metric("Campaign Name", active_camp.get("name", "Active"))
+        with r_c2:
+            st.metric("CPM Payout Rate", f"${cpm_val:.2f} / 1k views")
+        with r_c3:
+            st.metric("Realized Payout Earned", f"${earned_val:,.2f}", delta=f"{c_pct*100:.1f}% of goal")
+        with r_c4:
+            st.metric("Views Remaining", f"{v_need:,}", delta=f"Target: {roi.get('target_views', 0):,} views")
+
+        st.caption(f"**Revenue Goal Progress:** `${earned_val:,.2f}` earned towards `${goal_val:,.2f}` payout cap ({c_pct*100:.1f}% achieved)")
+        st.progress(c_pct)
+
+        # 1-Click Submission Helper
+        camp_clips = roi.get("clips", [])
+        if camp_clips:
+            with st.expander(f"📋 1-Click Submission Links ({len(camp_clips)} Eligible Clips for Payout)", expanded=True):
+                st.caption("Submit these links into ContentRewards.com dashboard for view-tracking & payout.")
+                sub_rows = []
+                for cc in camp_clips:
+                    sub_rows.append({
+                        "Title": cc.get("title", "Clip")[:40],
+                        "Views": cc.get("views", 0),
+                        "Earned ($)": f"${cc.get('earned_usd', 0.0):.2f}",
+                        "YouTube Link": cc.get("watch_url", "")
+                    })
+                st.dataframe(sub_rows, use_container_width=True, column_config={
+                    "YouTube Link": st.column_config.LinkColumn("Shorts URL", display_text="Open ↗️")
+                })
 
 
 def render_learning_stage():
