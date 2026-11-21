@@ -475,8 +475,8 @@ def render_mode_a_short(
     has_logo = logo_path and Path(logo_path).exists()
     sfx_file = Path("assets/sfx/whoosh.wav")
     has_sfx = enable_sfx and sfx_file.exists()
-    music_file = Path("assets/music/phonk_beat.wav")
-    has_music = enable_music_ducking and music_file.exists()
+    # HARD RULE: Background songs/music permanently disabled to guarantee 0% Content ID copyright claims
+    has_music = False
 
     # Optional Frame-1 viral hook banner (first 1.2s to boost feed CTR)
     hook_filter_str = ""
@@ -692,34 +692,28 @@ def render_mode_b_short(
     ]
     subprocess.run(cat_cmd, capture_output=True, timeout=60)
 
-    # Step 3: Mix audio (duck original gameplay audio to 20%, overlay narration at 100%) + optional logo overlay
+    # Step 3: Pure narration audio overlay (strictly omit input 0 audio to eliminate background song copyright claims)
     has_logo = logo_path and Path(logo_path).exists()
     mix_inputs = [
         "-i", str(concatenated_raw.resolve()),
         "-i", str(narration_audio.resolve())
     ]
-    
+
     if has_logo:
         mix_inputs.extend(["-i", str(Path(logo_path).resolve())])
-        fc = (
-            "[0:v][2:v]overlay=W-w-50:220[v_out];"
-            "[0:a]volume=0.20[a_game];[1:a]volume=1.00[a_narr];"
-            "[a_game][a_narr]amix=inputs=2:duration=first:dropout_transition=2[a_out]"
-        )
-        map_args = ["-map", "[v_out]", "-map", "[a_out]"]
+        fc = "[0:v][2:v]overlay=W-w-50:220[v_out]"
+        map_args = ["-map", "[v_out]", "-map", "1:a:0"]
         c_v_args = get_best_video_encoder()
+        fc_args = ["-filter_complex", fc]
     else:
-        fc = (
-            "[0:a]volume=0.20[a_game];[1:a]volume=1.00[a_narr];"
-            "[a_game][a_narr]amix=inputs=2:duration=first:dropout_transition=2[a_out]"
-        )
-        map_args = ["-map", "0:v", "-map", "[a_out]"]
+        map_args = ["-map", "0:v:0", "-map", "1:a:0"]
         c_v_args = ["-c:v", "copy"]
+        fc_args = []
 
     mix_cmd = [
         ffmpeg_bin, "-y",
         *mix_inputs,
-        "-filter_complex", fc,
+        *fc_args,
         *map_args,
         *c_v_args,
         "-c:a", "aac", "-b:a", "128k",

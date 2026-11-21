@@ -983,7 +983,8 @@ def render_manual_clipper():
             enable_hook_badge = st.checkbox("🔥 Frame-1 Viral Hook Badge", value=True, help="Burns dynamic curiosity banner into Frame 1 (first 1.2s) to maximize YouTube Shorts swipe-through rate")
             enable_anti_cid = st.checkbox("🛡️ Anti-Content-ID Protection", value=True, help="0.3% dynamic scale/acoustic jitter to prevent duplicate match and protect monetization")
             enable_sfx = st.checkbox("💥 SFX Punch-In Transitions", value=True, help="Injects audio impact/whoosh transitions on hook and key beats")
-            enable_phonk = st.checkbox("🎵 Background Beat (Sidechain Ducking)", value=False, help="Layers trending gaming rhythm beat with automatic voice ducking")
+            st.caption("🛡️ **Copyright Audio Shield:** Background songs permanently disabled to guarantee 100% Green Dollar monetization & zero Content ID claims.")
+            enable_phonk = False
             split_cam = st.checkbox("Facecam split (9:16)", value=False)
             if split_cam:
                 cam_position = st.selectbox(

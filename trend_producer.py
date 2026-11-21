@@ -31,6 +31,7 @@ from editor import (
 from uploader import upload_batch_private, is_authenticated
 from trends_hunter import get_trend_news_articles, search_trend_source_videos
 from learning_engine import get_learned_seo_boost, get_optimized_prompt_injection
+from safety import is_cricket_or_broadcast_sports
 from arbiter import (
     acquire_compute_lock,
     release_compute_lock,
@@ -214,14 +215,14 @@ def get_audio_duration(audio_path: Path) -> float:
 
 
 def create_solid_color_broll(output_path: Path, duration: float, is_vertical: bool = True) -> Path:
-    """Generates sleek dark news studio motion backdrop if no external video is available."""
+    """Generates sleek dark news studio motion backdrop with vignette and subtle ambient particles (100% copyright-free)."""
     ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
     size_str = "1080x1920" if is_vertical else "1920x1080"
     cmd = [
         ffmpeg_bin, "-y",
         "-f", "lavfi",
-        "-i", f"color=c=0x0a0f1d:s={size_str}:d={duration:.2f}",
-        "-vf", "noise=c1s=8:c1f=t+u,eq=contrast=1.1:brightness=-0.05",
+        "-i", f"color=c=0x070c18:s={size_str}:d={duration:.2f}",
+        "-vf", "noise=c1s=8:c1f=t+u,eq=contrast=1.12:brightness=-0.04,vignette=PI/4",
         "-c:v", "libx264", "-preset", "ultrafast",
         str(output_path)
     ]
@@ -243,6 +244,7 @@ def produce_trend_package(
     Auto-schedules to YouTube Studio.
     """
     query = trend.get("query", "Trending_Topic")
+    breakdown = trend.get("trend_breakdown", [query])
     safe_q = "".join(c if c.isalnum() else "_" for c in query)[:25].strip("_")
     ts = int(time.time())
 
@@ -272,24 +274,38 @@ def produce_trend_package(
     shorts_scripts = package_scripts.get("shorts", [])[:6]
     landscapes_scripts = package_scripts.get("landscapes", [])[:2]
 
-    # Step 2: Sourcing visual footage
-    update_status(2, "Step 2/5: Sourcing Footage", f"Sourcing background YouTube clips for '{query}'...", 25, 0, 0)
-    log("Step 2/5: Sourcing YouTube background clips for trend visuals...")
-    yt_videos = search_trend_source_videos(query, max_results=2)
+    # Step 2: Sourcing visual footage with Strict Copyright Shield
+    update_status(2, "Step 2/5: Sourcing Footage", f"Checking copyright safety & sourcing visuals for '{query}'...", 25, 0, 0)
+    log("Step 2/5: Checking copyright safety & sourcing visuals...")
+
+    is_protected_sports = is_cricket_or_broadcast_sports(query) or any(
+        is_cricket_or_broadcast_sports(b) for b in breakdown
+    )
+
     source_clip_vertical = None
     source_clip_landscape = None
 
-    if yt_videos:
-        raw_dl = work_dir / "raw_trend_source.mp4"
-        top_url = yt_videos[0]["url"]
-        log(f"Downloading 45s section from top YouTube video: '{yt_videos[0]['title']}'...")
-        try:
-            download_video_section(top_url, start_sec=10.0, end_sec=55.0, output_mp4_path=raw_dl)
-            if is_valid_video_file(raw_dl):
-                source_clip_vertical = raw_dl
-                source_clip_landscape = raw_dl
-        except Exception as e:
-            log(f"⚠️ YouTube clip download failed: {e}")
+    if is_protected_sports:
+        log(f"🛡️ STRICT COPYRIGHT SHIELD ACTIVE: '{query}' involves cricket / protected broadcast sports.")
+        log("🛡️ Real cricket / broadcast sports footage is PERMANENTLY BANNED to protect YouTube channel monetization.")
+        log("🛡️ Generating 100% copyright-free dynamic motion studio visuals instead.")
+    else:
+        yt_videos = search_trend_source_videos(query, max_results=2)
+        if yt_videos:
+            top_title = yt_videos[0].get("title", "")
+            if is_cricket_or_broadcast_sports(top_title):
+                log(f"🛡️ Excluded copyright risk video: '{top_title}'. Using safe studio backdrop.")
+            else:
+                raw_dl = work_dir / "raw_trend_source.mp4"
+                top_url = yt_videos[0]["url"]
+                log(f"Downloading 45s section from YouTube video: '{top_title}'...")
+                try:
+                    download_video_section(top_url, start_sec=10.0, end_sec=55.0, output_mp4_path=raw_dl)
+                    if is_valid_video_file(raw_dl):
+                        source_clip_vertical = raw_dl
+                        source_clip_landscape = raw_dl
+                except Exception as e:
+                    log(f"⚠️ YouTube clip download failed: {e}")
 
     # Fallback B-roll if needed
     if not source_clip_vertical or not is_valid_video_file(source_clip_vertical):
@@ -437,6 +453,8 @@ def produce_trend_package(
                 "-i", str(wav_path),
                 "-t", f"{dur:.2f}",
                 "-vf", vf_filter,
+                "-map", "0:v:0",
+                "-map", "1:a:0",
                 *get_best_video_encoder(),
                 "-c:a", "aac",
                 "-b:a", "192k",

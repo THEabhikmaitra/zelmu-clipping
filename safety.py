@@ -15,6 +15,33 @@ ADULT_MONETIZATION_RISK_KEYWORDS = {
     "torture", "suicide", "beheading", "rape", "gore", "bloodbath", "dismember"
 }
 
+# Strict Broadcast Copyright Blocklist: Cricket & Official Sports Broadcasters
+# These entities have 100% automated YouTube Content ID fingerprinting. Using real footage causes instant strikes.
+CRICKET_AND_SPORTS_KEYWORDS = {
+    # Cricket broad & specific terms
+    "cricket", "bcci", "icc", "ipl", "wpl", "t20", "odi", "test match",
+    "cricbuzz", "espncricinfo", "star sports", "willow", "hotstar", "jiocinema",
+    "virat kohli", "rohit sharma", "ms dhoni", "dhoni", "bumrah", "hardik pandya",
+    "babar azam", "pat cummins", "ind vs", "aus vs", "eng vs", "pak vs", "sa vs",
+    "wicket", "sixes", "batsman", "bowler", "super over", "world cup", "match highlights",
+    "cricket highlights", "live score", "boundary", "stumped", "century", "half century",
+    "team india", "ipl 2024", "ipl 2025", "ipl 2026", "cricket world cup",
+    # Major global sports broadcast copyright holders
+    "uefa", "fifa", "premier league", "champions league", "nba", "nfl", "f1", "formula 1",
+    "wwe", "ufc", "espn", "sky sports", "fox sports", "dazn", "bein sports", "sony liv"
+}
+
+def is_cricket_or_broadcast_sports(text: str) -> bool:
+    """Detects whether text mentions cricket or strictly protected broadcast sports footage."""
+    if not text:
+        return False
+    lower = text.lower()
+    for kw in CRICKET_AND_SPORTS_KEYWORDS:
+        pattern = r"\b" + re.escape(kw) + r"\b" if " " not in kw else re.escape(kw)
+        if re.search(pattern, lower):
+            return True
+    return False
+
 def is_profane(word: str) -> bool:
     clean = re.sub(r"[^\w]", "", word.lower())
     return clean in PROFANITY_LIST

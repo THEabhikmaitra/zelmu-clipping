@@ -15,6 +15,7 @@ import datetime
 import subprocess
 from typing import List, Dict, Any, Optional
 from transcriber import get_ytdlp_cmd
+from safety import is_cricket_or_broadcast_sports
 
 
 CATEGORIES = {
@@ -237,7 +238,14 @@ def fetch_google_trends_rss_fallback(geo: str = "US") -> List[Dict[str, Any]]:
 def search_trend_source_videos(trend_query: str, max_results: int = 3, topic_filter: str = "") -> List[Dict[str, Any]]:
     """
     Searches YouTube via yt-dlp for top recent videos matching the breakout trend.
+    STRICT COPYRIGHT SHIELD: Automatically rejects any search terms or results matching
+    cricket or protected broadcast sports footage to prevent Content ID claims.
     """
+    # Block cricket and broadcast sports footage searches at entry
+    if is_cricket_or_broadcast_sports(trend_query) or is_cricket_or_broadcast_sports(topic_filter):
+        print(f"[CopyrightShield] Search blocked for '{trend_query}': Real cricket & broadcast sports footage strictly prohibited.")
+        return []
+
     search_terms = f"{trend_query} {topic_filter}".strip() if topic_filter else trend_query
     cmd = [
         *get_ytdlp_cmd(),
@@ -255,13 +263,20 @@ def search_trend_source_videos(trend_query: str, max_results: int = 3, topic_fil
             for e in entries:
                 if not e:
                     continue
+                v_title = e.get("title", "")
+                v_uploader = e.get("uploader", "Creator")
+                # Secondary guard: reject if result title or uploader is cricket/sports
+                if is_cricket_or_broadcast_sports(v_title) or is_cricket_or_broadcast_sports(v_uploader):
+                    print(f"[CopyrightShield] Excluded copyright risk video: '{v_title}' by {v_uploader}")
+                    continue
+
                 v_id = e.get("id")
                 v_url = f"https://www.youtube.com/watch?v={v_id}" if v_id else e.get("url")
                 out.append({
                     "id": v_id,
-                    "title": e.get("title", ""),
+                    "title": v_title,
                     "url": v_url,
-                    "uploader": e.get("uploader", "Creator"),
+                    "uploader": v_uploader,
                     "duration": e.get("duration", 0)
                 })
             return out
