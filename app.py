@@ -73,9 +73,15 @@ from trend_daemon import (
 )
 from trend_producer import produce_trend_package
 from instagram_scraper import (
-    fetch_instagram_metadata,
-    process_instagram_reel,
-    normalize_instagram_target
+    scan_and_calculate_account_reels,
+    start_or_resume_crawler,
+    pause_crawler,
+    reset_crawler,
+    load_crawler_state,
+    is_crawler_active,
+    get_insta_logs,
+    save_session_cookie,
+    get_session_cookie
 )
 from uploader import (
     upload_batch_private,
@@ -2629,124 +2635,163 @@ def render_learned_topics():
 
 def render_instagram_clipper():
     st.markdown("<div class='section-title'>STAGE 2: INSTAGRAM BULK INGESTION & CLIPPER</div>", unsafe_allow_html=True)
-    st.caption("Bulk downloads vertical reels from Instagram @accounts or custom URL lists, converts descriptions into YouTube SEO metadata, and queues directly to Stage 3 Quality Review.")
+    st.caption("Auto-calculates all reels from target @account, downloads 1-by-1 sequentially without breaking, with full Pause & Resume capability.")
 
-    col_in1, col_in2 = st.columns([1.6, 1.2], gap="medium")
+    # 1. Session & Account Discovery Row
+    top_c1, top_c2 = st.columns([1.5, 1.2], gap="medium")
 
-    with col_in1:
-        ingest_mode = st.radio(
-            "Target Source",
-            ["👤 Account Profile (@username)", "🔗 Custom URL Batch (List of Reels)"],
-            horizontal=True,
-            key="insta_ingest_mode"
+    with top_c1:
+        target_uname = st.text_input(
+            "Target Instagram Account (@username or Profile URL)",
+            placeholder="@mrbeast or https://www.instagram.com/username/",
+            key="insta_target_uname"
+        )
+        scan_limit = st.slider("Scan Search Depth (Max Reels)", min_value=5, max_value=150, value=50, step=5, key="insta_scan_limit")
+
+        scan_btn = st.button("🔍 Auto-Calculate All Reels on Account", type="secondary", use_container_width=True, key="btn_scan_insta")
+
+    with top_c2:
+        st.markdown("<div class='section-title'>SESSION & ANTI-BOT SHIELD</div>", unsafe_allow_html=True)
+        saved_sess = get_session_cookie()
+        sess_input = st.text_input(
+            "Instagram Session ID (sessionid cookie)",
+            value=saved_sess,
+            type="password",
+            placeholder="Paste sessionid cookie to bypass rate-limits",
+            key="insta_session_input"
+        )
+        if st.button("💾 Save SessionID", key="btn_save_sess", use_container_width=True):
+            save_session_cookie(sess_input)
+            st.success("✓ SessionID saved locally! Rate-limits unlocked.")
+
+        st.caption("🛡️ **Auto-Protection:** Broadcast cricket/sports reels are filtered out automatically. Background songs permanently banned.")
+
+    # Auto-Calculate Action
+    if scan_btn and target_uname.strip():
+        with st.spinner(f"Connecting to Instagram & calculating all reels for '{target_uname}'..."):
+            calc_data = scan_and_calculate_account_reels(
+                target=target_uname.strip(),
+                session_id=sess_input.strip() or saved_sess,
+                limit=scan_limit
+            )
+            st.session_state["insta_calc_data"] = calc_data
+
+    # Display Discovery Card
+    calc_data = st.session_state.get("insta_calc_data")
+    if calc_data and calc_data.get("reels"):
+        reels_list = calc_data.get("reels", [])
+        total_p = calc_data.get("total_account_posts", len(reels_list))
+        filt_s = calc_data.get("filtered_sports_count", 0)
+
+        st.markdown(
+            f"""
+            <div style="border:1px solid #0284c7; background:#082f49; border-radius:8px; padding:12px; margin-bottom:12px;">
+                <b style="color:#38bdf8; font-size:1.0rem;">📊 Account Discovery: @{calc_data.get('account')}</b><br>
+                <span style="color:#e0f2fe; font-size:0.85rem;">
+                    • <b>Total Account Posts:</b> {total_p} | 
+                    • <b>Discovered Video Reels:</b> <b style="color:#4ade80;">{len(reels_list)}</b> | 
+                    • <b>Cricket/Sports Filtered:</b> <b style="color:#fbbf24;">{filt_s} excluded</b>
+                </span>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
-        target_input = ""
-        max_reels = 5
-        custom_urls = []
+    # 2. Crawler State & Live Sequential Progress
+    st.markdown("<div class='section-title'>1-BY-1 SEQUENTIAL INGESTION DASHBOARD</div>", unsafe_allow_html=True)
+    c_state = load_crawler_state()
+    crawler_status = c_state.get("status", "idle")
+    total_q = c_state.get("total_count", 0)
+    completed_q = len(c_state.get("completed_ids", []))
+    failed_q = len(c_state.get("failed_ids", []))
+    curr_cap = c_state.get("current_reel_caption", "None")
 
-        if "Account Profile" in ingest_mode:
-            target_input = st.text_input(
-                "Instagram Username or Profile URL",
-                placeholder="@username or https://www.instagram.com/username/",
-                key="insta_target_account"
-            )
-            max_reels = st.slider("Number of Recent Reels to Fetch", min_value=1, max_value=25, value=5, key="insta_max_reels")
-        else:
-            raw_urls_text = st.text_area(
-                "Paste Instagram Reel URLs (One per line)",
-                placeholder="https://www.instagram.com/reel/C8xyz123/\nhttps://www.instagram.com/reel/C9abc456/",
-                height=130,
-                key="insta_custom_urls"
-            )
-            custom_urls = [l.strip() for l in raw_urls_text.splitlines() if l.strip().startswith("http")]
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    with kpi1:
+        status_badges = {
+            "running": "🟢 RUNNING (1-by-1)",
+            "paused": "⏸️ PAUSED",
+            "completed": "🏁 COMPLETED",
+            "idle": "⚪ IDLE"
+        }
+        st.metric("Crawler Status", status_badges.get(crawler_status, "⚪ IDLE"))
+    with kpi2:
+        st.metric("Progress", f"{completed_q} / {total_q} Completed")
+    with kpi3:
+        st.metric("Active Account", f"@{c_state.get('account', 'None')}")
+    with kpi4:
+        st.metric("Failed / Skipped", f"{failed_q}")
 
-    with col_in2:
-        st.markdown("<div class='section-title'>REPURPOSING PIPELINE SETTINGS</div>", unsafe_allow_html=True)
-        proc_mode = st.radio(
-            "Processing Workflow",
-            [
-                "⚡ Direct Repurpose (Fast 1080x1920 Clean Fit + SEO)",
-                "🎬 Full AI Transform (Whisper Subtitles + 3.2s Punch Zoom + Hook Banner)"
-            ],
-            index=0,
-            key="insta_proc_mode"
-        )
-        mode_val = "transform" if "Full AI" in proc_mode else "direct"
+    prog_pct = (completed_q / max(1, total_q)) if total_q > 0 else 0.0
+    st.progress(prog_pct)
 
-        cookies_file = st.text_input(
-            "Optional Cookies File Path",
-            placeholder="C:/clipping/cookies.txt (optional, for rate-limit bypass)",
-            key="insta_cookies_path"
-        )
-        st.caption("🛡️ **Copyright Guard:** Cricket & broadcast sports reels are blocked automatically. Background songs strictly disabled.")
+    if crawler_status == "running":
+        st.info(f"⏳ Currently downloading & processing: **'{curr_cap}'**...")
 
-    btn_label = f"🚀 Ingest Latest {max_reels} Reels" if "Account Profile" in ingest_mode else f"🚀 Ingest {len(custom_urls)} Custom Reels"
+    # Workflow Mode Selector
+    proc_mode = st.radio(
+        "Repurposing Workflow",
+        [
+            "⚡ Direct Repurpose (Fast 1080x1920 Clean Fit + Ollama SEO)",
+            "🎬 Full AI Transform (Whisper Karaoke Subtitles + 3.2s Punch Zoom + Hook Banner)"
+        ],
+        index=0 if c_state.get("mode", "direct") == "direct" else 1,
+        horizontal=True,
+        key="insta_proc_mode_ctrl"
+    )
+    mode_val = "transform" if "Full AI" in proc_mode else "direct"
 
-    if st.button(btn_label, type="primary", use_container_width=True, key="btn_start_insta_ingest"):
-        if "Account Profile" in ingest_mode and not target_input.strip():
-            st.error("Please enter a valid Instagram @username or profile URL.")
-            return
-        elif "Custom URL" in ingest_mode and not custom_urls:
-            st.error("Please paste at least one valid Instagram Reel URL.")
-            return
+    # Control Action Buttons (Start / Resume / Pause / Reset)
+    btn_c1, btn_c2, btn_c3, btn_c4 = st.columns(4)
 
-        p_bar = st.progress(0.0)
-        p_status = st.empty()
-        log_expander = st.expander("Live Ingestion & Processing Logs", expanded=True)
-        log_box = log_expander.empty()
-        logs = []
-
-        def ui_log(msg: str):
-            logs.append(msg)
-            log_box.code("\n".join(logs[-12:]))
-
-        processed_clips = []
-        cookies_arg = cookies_file.strip() if cookies_file and Path(cookies_file.strip()).exists() else None
-
-        p_status.info("🔍 Connecting to Instagram & fetching reels metadata...")
-        ui_log("Connecting to Instagram via yt-dlp metadata engine...")
-
-        if "Account Profile" in ingest_mode:
-            all_reels_meta = fetch_instagram_metadata(target_input.strip(), max_items=max_reels, cookies_path=cookies_arg)
-        else:
-            all_reels_meta = []
-            for u in custom_urls:
-                m_list = fetch_instagram_metadata(u, max_items=1, cookies_path=cookies_arg)
-                all_reels_meta.extend(m_list)
-
-        if not all_reels_meta:
-            p_status.warning("No reels found or all reels filtered by copyright shield. Ensure account is public.")
-            return
-
-        total_items = len(all_reels_meta)
-        ui_log(f"Found {total_items} reels to process. Starting batch repurposing pipeline...")
-
-        for idx, r_meta in enumerate(all_reels_meta):
-            r_caption = r_meta.get("caption", "")[:45]
-            pct = idx / total_items
-            p_bar.progress(pct)
-            p_status.info(f"Processing ({idx+1}/{total_items}): '{r_caption}...'")
-            ui_log(f"[{idx+1}/{total_items}] Ingesting: {r_meta.get('url')}")
-
-            out_clip = process_instagram_reel(
-                reel_info=r_meta,
-                mode=mode_val,
-                cookies_path=cookies_arg,
-                progress_callback=ui_log
-            )
-            if out_clip and out_clip.exists():
-                processed_clips.append(out_clip)
-
-        p_bar.progress(1.0)
-        p_status.success(f"✓ Successfully processed {len(processed_clips)}/{total_items} Instagram Reels! Sent to Stage 3 Quality Review.")
-
-        if processed_clips:
-            st.markdown("##### Processed Video Assets Ready in Pipeline:")
-            for cp in processed_clips:
-                st.markdown(f"- 📦 `{cp.name}` &rarr; **Ready for Stage 3 (Quality & SEO Checklist)**")
-            if st.button("➡️ Go to Stage 3 Quality & SEO Review", type="primary", key="btn_go_to_stage3_from_insta"):
+    with btn_c1:
+        if crawler_status == "paused":
+            if st.button("▶️ Resume Ingestion", type="primary", use_container_width=True, key="btn_resume_crawler"):
+                start_or_resume_crawler(account=c_state.get("account", ""), mode=mode_val)
+                st.success("✓ Resumed crawler from exact checkpoint!")
                 st.rerun()
+        elif crawler_status != "running":
+            reels_to_start = calc_data.get("reels", []) if calc_data else []
+            acc_to_start = calc_data.get("account", target_uname.strip().lstrip("@")) if calc_data else target_uname.strip().lstrip("@")
+            can_start = bool(reels_to_start and acc_to_start)
+
+            if st.button(f"▶️ Start Ingest ({len(reels_to_start)} Reels)", type="primary", disabled=not can_start, use_container_width=True, key="btn_start_crawler"):
+                start_or_resume_crawler(account=acc_to_start, reels=reels_to_start, mode=mode_val)
+                st.success(f"✓ Started 1-by-1 ingestion for @{acc_to_start}!")
+                st.rerun()
+        else:
+            st.button("▶️ Ingesting Active...", disabled=True, use_container_width=True)
+
+    with btn_c2:
+        if crawler_status == "running":
+            if st.button("⏸️ Pause Ingestion", type="secondary", use_container_width=True, key="btn_pause_crawler"):
+                pause_crawler()
+                st.warning("⏸️ Ingestion paused. State saved!")
+                st.rerun()
+        else:
+            st.button("⏸️ Pause", disabled=True, use_container_width=True)
+
+    with btn_c3:
+        if st.button("🔄 Reset Queue / Clear", type="secondary", use_container_width=True, key="btn_reset_crawler"):
+            reset_crawler()
+            st.session_state["insta_calc_data"] = None
+            st.info("Queue and progress reset.")
+            st.rerun()
+
+    with btn_c4:
+        if st.button("🔄 Refresh Status", use_container_width=True, key="btn_refresh_crawler_status"):
+            st.rerun()
+
+    # 3. Live Log Console
+    with st.expander("Live Sequential Ingestion Logs", expanded=(crawler_status == "running")):
+        insta_logs = get_insta_logs(30)
+        st.code("\n".join(insta_logs) if insta_logs else "No events logged yet.", language="log")
+
+    if completed_q > 0:
+        st.success(f"✓ {completed_q} clips ready in `ready_to_upload/` with YouTube SEO sidecars!")
+        st.markdown(
+            "👉 [Switch to Stage 3 (Quality & SEO Checklist)](javascript:void(0)) to review monetization checks or approve for Studio upload."
+        )
 
 
 # Instant Client-Side Tabs (Positioned inside Top Fixed Navbar beside logo)

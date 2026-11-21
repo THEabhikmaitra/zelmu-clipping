@@ -1,8 +1,12 @@
 """
 Instagram Bulk Ingestion & Repurposing Engine for Zelmu Clipping.
-Fetches public Instagram Reels from @usernames or custom URL batches,
-transforms descriptions into YouTube SEO metadata via Ollama,
-and passes clips directly into Stage 3 Quality Review & Stage 4 Upload.
+Features:
+- Auto-calculate all Reels from target @account or custom URL batch
+- Safe 1-by-1 sequential download without breaking (error-isolated)
+- Persistent State with full Pause & Resume capability
+- Automatic Ollama YouTube SEO metadata rewriting
+- Direct feed into Stage 3 Quality Review & Stage 4 Upload
+- Strict copyright shield (zero cricket/sports broadcast footage, zero songs)
 """
 
 import os
@@ -10,7 +14,9 @@ import sys
 import re
 import json
 import time
+import threading
 import subprocess
+import requests
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -27,6 +33,102 @@ from arbiter import push_unified_log
 
 READY_DIR = Path("ready_to_upload")
 WORKSPACE_DIR = Path("workspace")
+INSTA_STATE_FILE = Path("insta_crawler_state.json")
+INSTA_LOG_FILE = Path("insta_crawler_events.log")
+INSTA_SESSION_FILE = Path("insta_session.json")
+
+_CRAWLER_THREAD: Optional[threading.Thread] = None
+_STOP_EVENT = threading.Event()
+_LOCK = threading.Lock()
+
+
+def push_insta_log(msg: str):
+    """Logs message to event file and unified arbiter log."""
+    ts = time.strftime("%H:%M:%S")
+    line = f"[{ts}] {msg}"
+    print(line)
+    push_unified_log("INSTA", msg)
+    try:
+        with open(INSTA_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
+def get_insta_logs(max_lines: int = 50) -> List[str]:
+    """Retrieves recent log lines."""
+    if not INSTA_LOG_FILE.exists():
+        return []
+    try:
+        with open(INSTA_LOG_FILE, "r", encoding="utf-8") as f:
+            lines = [l.strip() for l in f.readlines() if l.strip()]
+            return lines[-max_lines:]
+    except Exception:
+        return []
+
+
+def save_session_cookie(cookie_str: str):
+    """Saves Instagram sessionid string to local session config."""
+    try:
+        clean = cookie_str.strip().strip('"').strip("'")
+        with open(INSTA_SESSION_FILE, "w", encoding="utf-8") as f:
+            json.dump({"sessionid": clean, "updated_at": time.time()}, f, indent=2)
+    except Exception as e:
+        print(f"Error saving session cookie: {e}")
+
+
+def get_session_cookie() -> str:
+    """Loads saved Instagram sessionid."""
+    if INSTA_SESSION_FILE.exists():
+        try:
+            with open(INSTA_SESSION_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("sessionid", "")
+        except Exception:
+            pass
+    return ""
+
+
+def build_netscape_cookies_file(session_id: str, dest_path: Path) -> Path:
+    """Generates Netscape cookies.txt for yt-dlp to bypass rate limits."""
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    clean = session_id.strip().strip('"').strip("'")
+    content = f"# Netscape HTTP Cookie File\n.instagram.com\tTRUE\t/\tTRUE\t2147483647\tsessionid\t{clean}\n"
+    with open(dest_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return dest_path
+
+
+def load_crawler_state() -> Dict[str, Any]:
+    """Loads persistent crawler state for pause/resume."""
+    if INSTA_STATE_FILE.exists():
+        try:
+            with open(INSTA_STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "account": "",
+        "mode": "direct",
+        "total_count": 0,
+        "current_index": 0,
+        "completed_ids": [],
+        "failed_ids": [],
+        "reels_queue": [],
+        "status": "idle",  # "idle", "running", "paused", "completed"
+        "current_reel_caption": "",
+        "last_updated": 0
+    }
+
+
+def save_crawler_state(state: Dict[str, Any]):
+    """Persists crawler state to disk."""
+    state["last_updated"] = time.time()
+    try:
+        with open(INSTA_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+    except Exception as e:
+        print(f"Error saving crawler state: {e}")
 
 
 def normalize_instagram_target(target: str) -> Tuple[str, str]:
@@ -36,48 +138,113 @@ def normalize_instagram_target(target: str) -> Tuple[str, str]:
     clean = target.strip()
     if clean.startswith("@"):
         uname = clean.lstrip("@").strip()
-        return "profile", f"https://www.instagram.com/{uname}/reels/"
+        return "profile", f"https://www.instagram.com/{uname}/"
     elif clean.startswith("http://") or clean.startswith("https://"):
         if "/reel/" in clean or "/p/" in clean:
             return "reel", clean.split("?")[0].rstrip("/") + "/"
-        return "profile", clean.split("?")[0].rstrip("/") + "/reels/"
+        return "profile", clean.split("?")[0].rstrip("/") + "/"
     else:
-        # Assumed username
         uname = clean.strip()
-        return "profile", f"https://www.instagram.com/{uname}/reels/"
+        return "profile", f"https://www.instagram.com/{uname}/"
 
 
-def fetch_instagram_metadata(
+def scan_and_calculate_account_reels(
     target: str,
-    max_items: int = 10,
-    cookies_path: Optional[str] = None
-) -> List[Dict[str, Any]]:
+    cookies_path: Optional[str] = None,
+    session_id: Optional[str] = None,
+    limit: int = 50
+) -> Dict[str, Any]:
     """
-    Extracts metadata for Instagram reels using yt-dlp.
-    Guards against cricket/broadcast sports copyright risk.
+    Auto-calculates total reels published by target account.
+    Enumerates video reel items and filters out cricket/broadcast sports risks.
     """
     t_type, target_url = normalize_instagram_target(target)
+    clean_uname = target.lstrip("@").strip().split("/")[-1] if t_type == "profile" else "custom_batch"
+    sess_id = session_id or get_session_cookie()
+
+    reels = []
+    total_posts = 0
+    filtered_sports = 0
+
+    # Method 1: Instagram GraphQL Web Profile API
+    if t_type == "profile":
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "x-ig-app-id": "936619743392459"
+        }
+        if sess_id:
+            headers["Cookie"] = f"sessionid={sess_id};"
+
+        api_url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={clean_uname}"
+        try:
+            res = requests.get(api_url, headers=headers, timeout=12)
+            if res.status_code == 200:
+                data = res.json()
+                user_info = data.get("data", {}).get("user", {})
+                edge_owner = user_info.get("edge_owner_to_timeline_media", {})
+                total_posts = edge_owner.get("count", 0)
+                edges = edge_owner.get("edges", [])
+
+                for e in edges:
+                    node = e.get("node", {})
+                    # Reels/Videos only
+                    if node.get("is_video"):
+                        shortcode = node.get("shortcode")
+                        caption_edges = node.get("edge_media_to_caption", {}).get("edges", [])
+                        cap = caption_edges[0].get("node", {}).get("text", "") if caption_edges else ""
+
+                        if is_cricket_or_broadcast_sports(cap):
+                            filtered_sports += 1
+                            continue
+
+                        reels.append({
+                            "id": shortcode,
+                            "url": f"https://www.instagram.com/reel/{shortcode}/",
+                            "caption": cap,
+                            "uploader": clean_uname,
+                            "duration": float(node.get("video_duration") or 30.0)
+                        })
+                        if len(reels) >= limit:
+                            break
+
+                if reels:
+                    return {
+                        "account": clean_uname,
+                        "total_account_posts": total_posts,
+                        "discovered_reels_count": len(reels),
+                        "reels": reels,
+                        "filtered_sports_count": filtered_sports,
+                        "method": "graphql_api",
+                        "status": "ready"
+                    }
+        except Exception as e:
+            print(f"[InstaScraper] Web API check notice: {e}")
+
+    # Method 2: yt-dlp metadata extractor fallback
+    temp_cookie_p = None
+    if sess_id and not cookies_path:
+        temp_cookie_p = WORKSPACE_DIR / "temp_insta_cookies.txt"
+        build_netscape_cookies_file(sess_id, temp_cookie_p)
+        cookies_path = str(temp_cookie_p)
+
     cmd = [
         *get_ytdlp_cmd(),
         "--dump-single-json",
         "--flat-playlist",
+        "--playlist-end", str(limit),
         "--no-warnings",
         "--ignore-errors"
     ]
     if cookies_path and Path(cookies_path).exists():
         cmd.extend(["--cookies", str(Path(cookies_path).resolve())])
 
-    if t_type == "profile":
-        cmd.extend(["--playlist-end", str(max_items)])
-
     cmd.append(target_url)
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=40)
         if proc.returncode == 0 and proc.stdout.strip():
             data = json.loads(proc.stdout)
             entries = data.get("entries", []) if "entries" in data else [data]
-            reels = []
             for e in entries:
                 if not e:
                     continue
@@ -86,26 +253,33 @@ def fetch_instagram_metadata(
                 if not v_url:
                     continue
                 v_desc = e.get("description") or e.get("title") or ""
-                v_uploader = e.get("uploader") or e.get("channel") or ""
+                v_uploader = e.get("uploader") or clean_uname
 
-                # Strictly skip cricket/sports copyright risks
                 if is_cricket_or_broadcast_sports(v_desc) or is_cricket_or_broadcast_sports(v_uploader):
-                    print(f"[InstaScraper] Skipped copyright risk reel: '{v_desc[:40]}' by {v_uploader}")
+                    filtered_sports += 1
                     continue
 
                 reels.append({
                     "id": v_id,
                     "url": v_url,
                     "caption": v_desc,
-                    "uploader": v_uploader or target.strip("@"),
+                    "uploader": v_uploader,
                     "duration": float(e.get("duration") or 30.0)
                 })
-                if len(reels) >= max_items:
+                if len(reels) >= limit:
                     break
-            return reels
     except Exception as e:
-        print(f"Error fetching Instagram metadata: {e}")
-    return []
+        print(f"[InstaScraper] yt-dlp fallback error: {e}")
+
+    return {
+        "account": clean_uname,
+        "total_account_posts": total_posts or len(reels),
+        "discovered_reels_count": len(reels),
+        "reels": reels,
+        "filtered_sports_count": filtered_sports,
+        "method": "yt_dlp",
+        "status": "ready" if reels else "empty"
+    }
 
 
 def convert_caption_to_youtube_seo(caption: str, uploader: str = "") -> Dict[str, Any]:
@@ -113,13 +287,11 @@ def convert_caption_to_youtube_seo(caption: str, uploader: str = "") -> Dict[str
     Converts raw Instagram caption to YouTube SEO Title, Description, and Tags
     via Ollama with smart regex fallback.
     """
-    # Clean hashtag spam & repetitive whitespace
     clean_text = re.sub(r'#\w+', '', caption).strip()
     clean_lines = [l.strip() for l in clean_text.splitlines() if l.strip() and not l.startswith('.')]
     lead_sentence = clean_lines[0] if clean_lines else "Unbelievable Viral Moment"
     account_handle = f"@{uploader.lstrip('@')}" if uploader else "@creator"
 
-    # Try Ollama JSON generation
     prompt = f"""You are a YouTube Shorts SEO specialist. Convert this Instagram Reel caption into a high-CTR YouTube Short title and description:
 Caption: "{lead_sentence[:120]}"
 Original Creator: {account_handle}
@@ -143,7 +315,6 @@ Return ONLY JSON:
     except Exception:
         pass
 
-    # High-CTR Fallback
     base_title = lead_sentence[:50].strip()
     title = f"{base_title.title()} 🤯 #Shorts" if len(base_title) <= 50 else f"{base_title[:45].title()}... #Shorts"
     extracted_hashtags = [w.strip("#") for w in re.findall(r'#\w+', caption)[:8]]
@@ -198,9 +369,8 @@ def process_instagram_reel(
     progress_callback: Optional[Any] = None
 ) -> Optional[Path]:
     """
-    Downloads reel, converts caption to YouTube SEO sidecar,
-    and formats into Stage 3 Quality Review queue:
-    - 'direct': standardize to 1080x1920 MP4 with original audio.
+    Processes single reel into Stage 3 Quality Review queue:
+    - 'direct': standardize to 1080x1920 MP4 with clean audio.
     - 'transform': adds Whisper karaoke subtitles, 3.2s punch zoom & frame-1 hook.
     """
     def log(msg: str):
@@ -235,7 +405,6 @@ def process_instagram_reel(
 
     if mode == "transform":
         log("🎬 Applying Full AI Transformation (Subtitles + 3.2s Zoom + Frame-1 Hook)...")
-        # Extract audio for Whisper transcription
         audio_wav = work_dir / "audio.wav"
         subprocess.run([
             ffmpeg_bin, "-y", "-i", str(raw_mp4),
@@ -256,7 +425,6 @@ def process_instagram_reel(
             log(f"⚠️ Whisper transcription fallback: {e}")
 
         generate_karaoke_ass(words, ass_file, clip_start_offset=0.0, style_preset="neon")
-
         hook_banner = seo_meta.get("title", "").split("#")[0].strip()[:28].upper()
 
         render_mode_a_short(
@@ -274,7 +442,6 @@ def process_instagram_reel(
         )
     else:
         log("⚡ Fast Direct Repurpose: Normalizing to 1080x1920 MP4...")
-        # Standardize 9:16 layout with centered fit
         vf = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
         cmd = [
             ffmpeg_bin, "-y",
@@ -290,7 +457,7 @@ def process_instagram_reel(
         log(f"⚠️ Processing failed for reel {r_id}")
         return None
 
-    # Save Sidecar Metadata JSON for Stage 3 & Stage 4
+    # Save Sidecar Metadata JSON for Stage 3 Quality Review & Stage 4 Upload
     sidecar_path = final_mp4.with_suffix(".json")
     try:
         with open(sidecar_path, "w", encoding="utf-8") as f:
@@ -312,3 +479,168 @@ def process_instagram_reel(
 
     log(f"✓ Successfully processed: {final_mp4.name} (Ready for Stage 3 Quality Check)")
     return final_mp4
+
+
+# ---------------------------------------------------------------------------
+# Background Crawler Daemon with 1-by-1 Safe Execution, Pause & Resume
+# ---------------------------------------------------------------------------
+
+def _crawler_worker_loop():
+    """Sequential 1-by-1 worker that respects pause/resume state."""
+    while not _STOP_EVENT.is_set():
+        state = load_crawler_state()
+        if state.get("status") != "running":
+            break
+
+        queue = state.get("reels_queue", [])
+        completed = set(state.get("completed_ids", []))
+        failed = set(state.get("failed_ids", []))
+
+        # Find next uncompleted reel
+        next_item = None
+        next_idx = 0
+        for idx, item in enumerate(queue):
+            if item.get("id") not in completed and item.get("id") not in failed:
+                next_item = item
+                next_idx = idx
+                break
+
+        if not next_item:
+            state["status"] = "completed"
+            save_crawler_state(state)
+            push_insta_log(f"🏁 Finished all {len(completed)}/{len(queue)} reels! All queued in Stage 3 Quality Review.")
+            break
+
+        r_id = next_item.get("id")
+        r_caption = next_item.get("caption", "")[:40]
+        state["current_index"] = len(completed)
+        state["current_reel_caption"] = r_caption
+        save_crawler_state(state)
+
+        push_insta_log(f"🚀 [Clip #{len(completed)+1}/{len(queue)}] Starting 1-by-1 download for reel '{r_id}' ({r_caption})...")
+
+        sess_id = get_session_cookie()
+        temp_cookies_p = None
+        if sess_id:
+            temp_cookies_p = WORKSPACE_DIR / "temp_insta_cookies.txt"
+            build_netscape_cookies_file(sess_id, temp_cookies_p)
+
+        try:
+            out_clip = process_instagram_reel(
+                reel_info=next_item,
+                mode=state.get("mode", "direct"),
+                cookies_path=str(temp_cookies_p) if temp_cookies_p else None,
+                progress_callback=push_insta_log
+            )
+            state = load_crawler_state()
+            if out_clip and out_clip.exists():
+                if r_id not in state["completed_ids"]:
+                    state["completed_ids"].append(r_id)
+                push_insta_log(f"✓ [Clip #{len(state['completed_ids'])}/{len(queue)}] Completed successfully: {out_clip.name}")
+            else:
+                if r_id not in state["failed_ids"]:
+                    state["failed_ids"].append(r_id)
+                push_insta_log(f"⚠️ [Clip #{len(state['completed_ids'])+1}] Reel {r_id} failed download. Continuing to next.")
+        except Exception as err:
+            state = load_crawler_state()
+            if r_id not in state["failed_ids"]:
+                state["failed_ids"].append(r_id)
+            push_insta_log(f"⚠️ Error on reel {r_id}: {err}. Safely continuing...")
+
+        state["current_index"] = len(state["completed_ids"])
+        save_crawler_state(state)
+
+        # Gentle 2.5s jitter delay to prevent rate-limiting
+        for _ in range(5):
+            if _STOP_EVENT.is_set():
+                break
+            time.sleep(0.5)
+
+    if _STOP_EVENT.is_set():
+        state = load_crawler_state()
+        if state.get("status") == "running":
+            state["status"] = "paused"
+            save_crawler_state(state)
+            push_insta_log(f"⏸️ Ingestion paused. Saved progress at clip #{len(state.get('completed_ids', []))}/{state.get('total_count', 0)}.")
+
+
+def start_or_resume_crawler(
+    account: str,
+    reels: Optional[List[Dict[str, Any]]] = None,
+    mode: str = "direct"
+) -> bool:
+    """Starts or resumes 1-by-1 background reel crawler."""
+    global _CRAWLER_THREAD, _STOP_EVENT
+    with _LOCK:
+        state = load_crawler_state()
+
+        # If already paused for this account, resume existing queue
+        if state.get("status") == "paused" and (state.get("account") == account or not account):
+            state["status"] = "running"
+            if mode:
+                state["mode"] = mode
+            save_crawler_state(state)
+            push_insta_log(f"▶️ Resuming Instagram crawler for @{state.get('account')} from clip #{len(state.get('completed_ids', [])) + 1}...")
+        else:
+            # New crawl initiation
+            queue = reels or []
+            state = {
+                "account": account,
+                "mode": mode,
+                "total_count": len(queue),
+                "current_index": 0,
+                "completed_ids": [],
+                "failed_ids": [],
+                "reels_queue": queue,
+                "status": "running",
+                "current_reel_caption": queue[0].get("caption", "")[:40] if queue else "",
+                "last_updated": time.time()
+            }
+            save_crawler_state(state)
+            push_insta_log(f"▶️ Started new 1-by-1 Instagram crawler for @{account} ({len(queue)} reels queued)...")
+
+        _STOP_EVENT.clear()
+        if _CRAWLER_THREAD is None or not _CRAWLER_THREAD.is_alive():
+            _CRAWLER_THREAD = threading.Thread(target=_crawler_worker_loop, daemon=True)
+            _CRAWLER_THREAD.start()
+        return True
+
+
+def pause_crawler() -> bool:
+    """Pauses background crawler safely without losing progress."""
+    global _STOP_EVENT
+    with _LOCK:
+        _STOP_EVENT.set()
+        state = load_crawler_state()
+        state["status"] = "paused"
+        save_crawler_state(state)
+        push_insta_log("⏸️ Paused Instagram crawler. State safely preserved.")
+        return True
+
+
+def reset_crawler() -> bool:
+    """Resets crawler queue and state."""
+    global _STOP_EVENT
+    with _LOCK:
+        _STOP_EVENT.set()
+        state = {
+            "account": "",
+            "mode": "direct",
+            "total_count": 0,
+            "current_index": 0,
+            "completed_ids": [],
+            "failed_ids": [],
+            "reels_queue": [],
+            "status": "idle",
+            "current_reel_caption": "",
+            "last_updated": time.time()
+        }
+        save_crawler_state(state)
+        push_insta_log("🔄 Reset Instagram crawler state.")
+        return True
+
+
+def is_crawler_active() -> bool:
+    """Checks if background thread is actively running."""
+    state = load_crawler_state()
+    return state.get("status") == "running" and (_CRAWLER_THREAD is not None and _CRAWLER_THREAD.is_alive())
