@@ -72,6 +72,11 @@ from trend_daemon import (
     push_daemon_log
 )
 from trend_producer import produce_trend_package
+from instagram_scraper import (
+    fetch_instagram_metadata,
+    process_instagram_reel,
+    normalize_instagram_target
+)
 from uploader import (
     upload_batch_private,
     upload_single_clip_direct,
@@ -2622,6 +2627,128 @@ def render_learned_topics():
             st.rerun()
 
 
+def render_instagram_clipper():
+    st.markdown("<div class='section-title'>STAGE 2: INSTAGRAM BULK INGESTION & CLIPPER</div>", unsafe_allow_html=True)
+    st.caption("Bulk downloads vertical reels from Instagram @accounts or custom URL lists, converts descriptions into YouTube SEO metadata, and queues directly to Stage 3 Quality Review.")
+
+    col_in1, col_in2 = st.columns([1.6, 1.2], gap="medium")
+
+    with col_in1:
+        ingest_mode = st.radio(
+            "Target Source",
+            ["👤 Account Profile (@username)", "🔗 Custom URL Batch (List of Reels)"],
+            horizontal=True,
+            key="insta_ingest_mode"
+        )
+
+        target_input = ""
+        max_reels = 5
+        custom_urls = []
+
+        if "Account Profile" in ingest_mode:
+            target_input = st.text_input(
+                "Instagram Username or Profile URL",
+                placeholder="@username or https://www.instagram.com/username/",
+                key="insta_target_account"
+            )
+            max_reels = st.slider("Number of Recent Reels to Fetch", min_value=1, max_value=25, value=5, key="insta_max_reels")
+        else:
+            raw_urls_text = st.text_area(
+                "Paste Instagram Reel URLs (One per line)",
+                placeholder="https://www.instagram.com/reel/C8xyz123/\nhttps://www.instagram.com/reel/C9abc456/",
+                height=130,
+                key="insta_custom_urls"
+            )
+            custom_urls = [l.strip() for l in raw_urls_text.splitlines() if l.strip().startswith("http")]
+
+    with col_in2:
+        st.markdown("<div class='section-title'>REPURPOSING PIPELINE SETTINGS</div>", unsafe_allow_html=True)
+        proc_mode = st.radio(
+            "Processing Workflow",
+            [
+                "⚡ Direct Repurpose (Fast 1080x1920 Clean Fit + SEO)",
+                "🎬 Full AI Transform (Whisper Subtitles + 3.2s Punch Zoom + Hook Banner)"
+            ],
+            index=0,
+            key="insta_proc_mode"
+        )
+        mode_val = "transform" if "Full AI" in proc_mode else "direct"
+
+        cookies_file = st.text_input(
+            "Optional Cookies File Path",
+            placeholder="C:/clipping/cookies.txt (optional, for rate-limit bypass)",
+            key="insta_cookies_path"
+        )
+        st.caption("🛡️ **Copyright Guard:** Cricket & broadcast sports reels are blocked automatically. Background songs strictly disabled.")
+
+    btn_label = f"🚀 Ingest Latest {max_reels} Reels" if "Account Profile" in ingest_mode else f"🚀 Ingest {len(custom_urls)} Custom Reels"
+
+    if st.button(btn_label, type="primary", use_container_width=True, key="btn_start_insta_ingest"):
+        if "Account Profile" in ingest_mode and not target_input.strip():
+            st.error("Please enter a valid Instagram @username or profile URL.")
+            return
+        elif "Custom URL" in ingest_mode and not custom_urls:
+            st.error("Please paste at least one valid Instagram Reel URL.")
+            return
+
+        p_bar = st.progress(0.0)
+        p_status = st.empty()
+        log_expander = st.expander("Live Ingestion & Processing Logs", expanded=True)
+        log_box = log_expander.empty()
+        logs = []
+
+        def ui_log(msg: str):
+            logs.append(msg)
+            log_box.code("\n".join(logs[-12:]))
+
+        processed_clips = []
+        cookies_arg = cookies_file.strip() if cookies_file and Path(cookies_file.strip()).exists() else None
+
+        p_status.info("🔍 Connecting to Instagram & fetching reels metadata...")
+        ui_log("Connecting to Instagram via yt-dlp metadata engine...")
+
+        if "Account Profile" in ingest_mode:
+            all_reels_meta = fetch_instagram_metadata(target_input.strip(), max_items=max_reels, cookies_path=cookies_arg)
+        else:
+            all_reels_meta = []
+            for u in custom_urls:
+                m_list = fetch_instagram_metadata(u, max_items=1, cookies_path=cookies_arg)
+                all_reels_meta.extend(m_list)
+
+        if not all_reels_meta:
+            p_status.warning("No reels found or all reels filtered by copyright shield. Ensure account is public.")
+            return
+
+        total_items = len(all_reels_meta)
+        ui_log(f"Found {total_items} reels to process. Starting batch repurposing pipeline...")
+
+        for idx, r_meta in enumerate(all_reels_meta):
+            r_caption = r_meta.get("caption", "")[:45]
+            pct = idx / total_items
+            p_bar.progress(pct)
+            p_status.info(f"Processing ({idx+1}/{total_items}): '{r_caption}...'")
+            ui_log(f"[{idx+1}/{total_items}] Ingesting: {r_meta.get('url')}")
+
+            out_clip = process_instagram_reel(
+                reel_info=r_meta,
+                mode=mode_val,
+                cookies_path=cookies_arg,
+                progress_callback=ui_log
+            )
+            if out_clip and out_clip.exists():
+                processed_clips.append(out_clip)
+
+        p_bar.progress(1.0)
+        p_status.success(f"✓ Successfully processed {len(processed_clips)}/{total_items} Instagram Reels! Sent to Stage 3 Quality Review.")
+
+        if processed_clips:
+            st.markdown("##### Processed Video Assets Ready in Pipeline:")
+            for cp in processed_clips:
+                st.markdown(f"- 📦 `{cp.name}` &rarr; **Ready for Stage 3 (Quality & SEO Checklist)**")
+            if st.button("➡️ Go to Stage 3 Quality & SEO Review", type="primary", key="btn_go_to_stage3_from_insta"):
+                st.rerun()
+
+
 # Instant Client-Side Tabs (Positioned inside Top Fixed Navbar beside logo)
 tab_mc, tab_research, tab_prod, tab_quality, tab_upload, tab_analytics, tab_learning = st.tabs([
     "🎛️ Mission",
@@ -2655,11 +2782,12 @@ with tab_research:
         render_learned_topics()
 
 with tab_prod:
-    sub_p1, sub_p2, sub_p3, sub_p4 = st.tabs([
+    sub_p1, sub_p2, sub_p3, sub_p4, sub_p5 = st.tabs([
         "⚡ Trend Factory (P1)",
         "🔴 Live Buffer (P2)",
         "🤖 VOD Watcher (P3)",
-        "🎬 Manual Clipper"
+        "🎬 Manual Clipper",
+        "📸 Insta Clipper"
     ])
     with sub_p1:
         render_trend_factory()
@@ -2669,6 +2797,8 @@ with tab_prod:
         render_vod_watcher()
     with sub_p4:
         render_manual_clipper()
+    with sub_p5:
+        render_instagram_clipper()
 
 with tab_quality:
     render_quality_seo_stage(READY_DIR)
