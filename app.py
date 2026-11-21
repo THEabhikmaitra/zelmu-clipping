@@ -133,9 +133,11 @@ from learning_engine import (
     cleanup_stale_workspaces
 )
 from portal_stages import (
+    render_pipeline_ribbon,
     render_quality_seo_stage,
     render_analytics_stage,
-    render_learning_stage
+    render_learning_stage,
+    save_sidecar_data
 )
 
 # Ensure base directories exist
@@ -944,12 +946,17 @@ def render_manual_clipper():
 
     with col_l:
         st.caption("SOURCE URLS")
+        initial_urls = st.session_state.get("manual_source_urls", "")
         url_input = st.text_area(
             "URLs",
+            value=initial_urls,
             height=130,
             placeholder="https://www.youtube.com/watch?v=...\nhttps://www.youtube.com/watch?v=...",
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="area_manual_source_urls"
         )
+        if initial_urls:
+            st.caption(f"🔗 Target received from Stage 1 Research")
 
     with col_r:
         st.caption("MODE & CONFIG")
@@ -1285,6 +1292,15 @@ def render_manual_clipper():
                                 enable_sfx=enable_sfx
                             )
                             push_log(f"✓ Rendered: {final_dest.name}")
+                            save_sidecar_data(final_dest, {
+                                "title": cand.get("title", final_dest.stem.replace("_", " ")),
+                                "description": f"🔥 {cand.get('title', '')}\n\n#Shorts #Gaming",
+                                "tags": ["Shorts", "Trending", "Gaming"],
+                                "stage": "pending_quality_review",
+                                "approved": False,
+                                "source": "manual_clipper",
+                                "created_at": time.time()
+                            })
                             # Auto-purge raw cuts immediately to eliminate SSD I/O drag
                             raw_seg.unlink(missing_ok=True)
                             for p in segments_dir.glob(f"seg_raw_{c_idx}.*"):
@@ -1386,6 +1402,15 @@ def render_manual_clipper():
                                 logo_path=active_logo_path
                             )
                             push_log(f"Rendered: {final_dest.name}")
+                            save_sidecar_data(final_dest, {
+                                "title": analysis.get("theme", final_dest.stem.replace("_", " ")),
+                                "description": f"🔥 {analysis.get('theme', '')}\n\nTransformative commentary.\n\n#Shorts #GTA6",
+                                "tags": ["GTA6", "Shorts", "Trending"],
+                                "stage": "pending_quality_review",
+                                "approved": False,
+                                "source": "manual_clipper_mode_b",
+                                "created_at": time.time()
+                            })
                             for c_path in downloaded_clips:
                                 if c_path and Path(c_path).exists():
                                     Path(c_path).unlink(missing_ok=True)
@@ -1586,10 +1611,40 @@ def render_upload_stage():
     auth_slots = [s for s in configured_slots if s["is_authenticated"]]
     pool_quota = max(10000, len(auth_slots) * 10000)
 
+    def is_clip_approved(p: Path) -> bool:
+        sc = p.with_suffix(".json")
+        if sc.exists():
+            try:
+                with open(sc, "r", encoding="utf-8") as f:
+                    return json.load(f).get("approved") is True
+            except Exception:
+                pass
+        return False
+
+    approved_videos = [f for f in ready_videos if is_clip_approved(f)]
+    pending_videos = [f for f in ready_videos if not is_clip_approved(f)]
+
     # Top Status Row
     col1, col2 = st.columns([1, 1])
     with col1:
-        st.metric("Ready in Queue", f"{len(ready_videos)} clips")
+        st.metric("Ready to Upload (Approved)", f"{len(approved_videos)} clips", delta=f"{len(pending_videos)} awaiting Stage 3" if pending_videos else None)
+        if pending_videos:
+            st.caption(f"⚠️ {len(pending_videos)} clips awaiting Stage 3 Quality Review.")
+            if st.button("⚡ Fast-Track: Approve All Pending Clips", key="btn_ft_appr", type="secondary"):
+                for pv in pending_videos:
+                    meta = {}
+                    sc = pv.with_suffix(".json")
+                    if sc.exists():
+                        try:
+                            with open(sc, "r", encoding="utf-8") as f:
+                                meta = json.load(f)
+                        except Exception:
+                            pass
+                    meta["approved"] = True
+                    meta["stage"] = "ready_for_upload"
+                    save_sidecar_data(pv, meta)
+                st.success(f"✓ Approved all {len(pending_videos)} clips for upload!")
+                st.rerun()
         if len(auth_slots) > 1:
             st.caption(f"⚡ Multi-Project Quota: {len(auth_slots) * 100} uploads/day across {len(auth_slots)} projects")
         elif len(ready_videos) > 100:
@@ -1819,13 +1874,14 @@ def render_upload_stage():
         st.caption(f"🗓️ **Calendar Schedule:** `{q_count}` Shorts will be scheduled across **{days_span} days** (~{slots_per_day}/day during peak US/UK hours).")
 
     # Upload Action Button
-    upload_disabled = len(ready_videos) == 0 or not yt_connected
+    target_upload_list = approved_videos if approved_videos else ready_videos
+    upload_disabled = len(target_upload_list) == 0 or not yt_connected
     upload_btn = st.button(
-        f"Upload & Schedule {min(len(ready_videos), batch_cap)} Shorts to YouTube" if auto_sched else f"Upload {min(len(ready_videos), batch_cap)} Shorts to YouTube (Private)",
+        f"Upload & Schedule {min(len(target_upload_list), batch_cap)} Approved Shorts to YouTube" if auto_sched else f"Upload {min(len(target_upload_list), batch_cap)} Approved Shorts to YouTube (Private)",
         type="primary",
         disabled=upload_disabled,
         use_container_width=True,
-        help="Uploads clips directly to your channel with private visibility or scheduled public release"
+        help="Uploads approved clips directly to your channel with private visibility or scheduled public release"
     )
 
     if upload_btn:
@@ -2327,22 +2383,46 @@ def render_trend_hunter():
                                 st.success(f"✓ Published {pkg_res['total_rendered']} assets (Public)!")
                                 st.rerun()
 
-                        if st.button(f"⚡ Open in Produce", key=f"btn_clip_{idx}", use_container_width=True):
+                        if st.button(f"🎬 Send to Manual Clipper (Stage 2)", key=f"btn_clip_{idx}", use_container_width=True):
                             with st.spinner(f"Searching YouTube..."):
                                 vids = search_trend_source_videos(tr['query'], max_results=3, topic_filter=video_topic_suffix)
                                 if vids:
                                     top_vid = vids[0]
+                                    st.session_state["manual_source_urls"] = top_vid["url"]
                                     st.session_state["txt_raw_url"] = top_vid["url"]
-                                    st.success(f"Selected: {top_vid['title']}! Switched.")
+                                    st.success(f"✓ Sent '{top_vid['title']}' to Stage 2 (Manual Clipper)!")
                                     st.rerun()
                                 else:
                                     st.warning("No YouTube videos found.")
+
+                        if st.button(f"⚡ Send to Trend Factory (Stage 2)", key=f"btn_send_factory_{idx}", use_container_width=True):
+                            st.session_state["target_trend_query"] = tr["query"]
+                            st.success(f"✓ Selected '{tr['query']}' for Stage 2 Trend Factory!")
+                            st.rerun()
     else:
         st.info("No trends. Click 'Scan' above.")
 
 
 def render_trend_factory():
     st.markdown("<div class='section-title'>DAEMON & TELEMETRY</div>", unsafe_allow_html=True)
+
+    target_q = st.session_state.get("target_trend_query", "")
+    if target_q:
+        st.info(f"🎯 **Target Trend from Stage 1:** `{target_q}`")
+        t_c1, t_c2 = st.columns([1.5, 1])
+        with t_c1:
+            if st.button(f"⚡ Produce 6 Shorts for '{target_q}' Now", type="primary", use_container_width=True, key="btn_run_target_trend"):
+                with st.spinner(f"Producing Shorts for '{target_q}'..."):
+                    cached = st.session_state.get("cached_us_trends", [])
+                    match = next((t for t in cached if t["query"] == target_q), {"query": target_q, "trend_breakdown": [target_q]})
+                    pkg_res = produce_trend_package(match, auto_upload=False)
+                    if pkg_res:
+                        st.success(f"✓ Produced {pkg_res.get('total_rendered', 0)} assets! Ready in Stage 3 Quality Gate.")
+                        st.rerun()
+        with t_c2:
+            if st.button("✕ Clear Target", key="btn_clear_target_q"):
+                del st.session_state["target_trend_query"]
+                st.rerun()
 
     d_cfg = load_daemon_config()
     d_running = is_trend_daemon_running()
@@ -2432,8 +2512,15 @@ def render_vod_radar():
     w_cfg = load_watcher_config()
     channels = w_cfg.get("channels", [])
     st.markdown(f"**Target Channels ({len(channels)}):**")
-    for ch in channels:
-        st.markdown(f"- 📹 [{ch}]({ch})")
+    for idx, ch in enumerate(channels):
+        c_v1, c_v2 = st.columns([3, 1.2])
+        with c_v1:
+            st.markdown(f"- 📹 [{ch}]({ch})")
+        with c_v2:
+            if st.button("🎬 Clip in Stage 2", key=f"btn_send_vod_{idx}", use_container_width=True):
+                st.session_state["manual_source_urls"] = ch
+                st.success(f"✓ Channel sent to Stage 2 Manual Clipper!")
+                st.rerun()
 
 
 def render_learned_topics():
@@ -2449,6 +2536,13 @@ def render_learned_topics():
     st.markdown(f"**Top High-CPM Tags:** `{tags_list}`")
     st.markdown(f"**Peak Viewing Windows (UTC):** `{utc_hours}` (10 AM - 5 PM US EST)")
 
+    if boost.get("boost_keywords"):
+        top_kw = boost["boost_keywords"][0]
+        if st.button(f"🎯 Apply Top Learned Keyword ('{top_kw}') to Stage 1 Research Filter", key="btn_apply_learned_kw", type="primary"):
+            st.session_state["trend_topic_filter"] = top_kw
+            st.success(f"✓ Research filtered by '{top_kw}'! Switch to 'Trends Hunter' tab.")
+            st.rerun()
+
 
 # Instant Client-Side Tabs (Positioned inside Top Fixed Navbar beside logo)
 tab_mc, tab_research, tab_prod, tab_quality, tab_upload, tab_analytics, tab_learning = st.tabs([
@@ -2460,6 +2554,8 @@ tab_mc, tab_research, tab_prod, tab_quality, tab_upload, tab_analytics, tab_lear
     "5. 📊 Analytics",
     "6. 🧠 Learning"
 ])
+
+render_pipeline_ribbon(READY_DIR)
 
 with tab_mc:
     render_mission_control()

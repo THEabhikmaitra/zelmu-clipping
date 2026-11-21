@@ -522,6 +522,20 @@ def process_video_autonomous(
                 hook_title=cand.get("title", "GTA 6 INSANE MOMENT") if enable_hook_badge else None
             )
             push_watcher_log(f"✓ Rendered autonomous short: {final_dest.name}")
+            sidecar_p = final_dest.with_suffix(".json")
+            try:
+                with open(sidecar_p, "w", encoding="utf-8") as sf:
+                    json.dump({
+                        "title": cand.get("title", f"{safe_title} #{c_idx+1}"),
+                        "description": f"🔥 {cand.get('title', safe_title)}\n\nHighlight moment from {title}.\n\n#Shorts #GTA6 #Gaming",
+                        "tags": ["GTA6", "Shorts", "Trending", "Gaming"],
+                        "stage": "pending_quality_review",
+                        "approved": False,
+                        "source": "vod_watcher",
+                        "created_at": time.time()
+                    }, sf, indent=2)
+            except Exception:
+                pass
             raw_seg.unlink(missing_ok=True)
             for p in segments_dir.glob(f"seg_raw_{c_idx}.*"):
                 p.unlink(missing_ok=True)

@@ -517,7 +517,11 @@ def process_livestream_slice(
                         ),
                         "tags": ["Shorts", author, "LiveStream", "Highlights", "Gaming", "Viral"],
                         "category_id": "20",  # Gaming
-                        "privacy_status": "private"
+                        "privacy_status": "private",
+                        "approved": False,
+                        "stage": "pending_quality_review",
+                        "source": "live_buffer",
+                        "created_at": time.time()
                     }, sf, indent=2)
             except Exception:
                 pass

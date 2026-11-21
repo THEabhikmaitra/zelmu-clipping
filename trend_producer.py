@@ -363,7 +363,11 @@ def produce_trend_package(
                         ),
                         "tags": [query, *trend.get("trend_breakdown", [])[:4], "Trending", "News", "Breaking News", "Breakout", "Shorts"],
                         "category_id": "25",
-                        "privacy_status": "public"
+                        "privacy_status": "public",
+                        "approved": False,
+                        "stage": "pending_quality_review",
+                        "source": "trend_factory",
+                        "created_at": time.time()
                     }, sf, indent=2, ensure_ascii=False)
             except Exception:
                 pass
