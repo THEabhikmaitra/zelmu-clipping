@@ -221,14 +221,21 @@ def download_reel_direct_cdn(url_or_shortcode: str, output_path: Path, session_i
                     headers = {
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                     }
-                    with requests.get(v_url, headers=headers, stream=True, timeout=25) as r:
-                        r.raise_for_status()
-                        with open(output_path, "wb") as f:
-                            for chunk in r.iter_content(chunk_size=65536):
-                                if chunk:
-                                    f.write(chunk)
-                    if is_valid_video_file(output_path):
-                        return True
+                    for attempt in range(2):
+                        try:
+                            with requests.get(v_url, headers=headers, stream=True, timeout=25) as r:
+                                r.raise_for_status()
+                                with open(output_path, "wb") as f:
+                                    for chunk in r.iter_content(chunk_size=65536):
+                                        if chunk:
+                                            f.write(chunk)
+                            if is_valid_video_file(output_path):
+                                return True
+                        except Exception as dl_err:
+                            if attempt == 0:
+                                time.sleep(1.5)
+                            else:
+                                print(f"[DirectCDN] Stream attempt 2 failed: {dl_err}")
             except Exception as e:
                 print(f"[DirectCDN] Prefix {prefix} check notice: {e}")
     except Exception as err:
@@ -785,6 +792,17 @@ def _crawler_worker_loop():
             save_crawler_state(state)
             push_insta_log(f"🏁 Finished all {len(completed)}/{len(queue)} reels! All queued in Stage 3 Quality Review.")
             break
+
+        # Disk Space Safeguard: Pause if free drive storage < 3.0 GB
+        try:
+            free_gb = shutil.disk_usage(".").free / (1024 ** 3)
+            if free_gb < 3.0:
+                push_insta_log(f"⚠️ [Storage Safeguard] Free disk space critically low ({free_gb:.1f} GB < 3.0 GB). Pausing crawler.")
+                state["status"] = "paused"
+                save_crawler_state(state)
+                break
+        except Exception:
+            pass
 
         r_id = next_item.get("id")
         r_caption = next_item.get("caption", "")[:40]
