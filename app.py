@@ -1839,52 +1839,67 @@ def render_upload_stage():
                                         st.rerun()
                     st.divider()
 
-    # Monetization & Scheduling Options
-    col_sc1, col_sc2 = st.columns([1, 1])
+    # Monetization, Cadence & Visibility Controls
+    col_sc1, col_sc2, col_sc3 = st.columns([1.2, 1.1, 1.0])
     with col_sc1:
-        auto_sched = st.checkbox(
-            "🎯 Auto-Schedule High-CPM Daily Slots",
-            value=True,
-            help="Spaces 100s of Shorts across daily peak US/UK gaming hours to maximize CPM & retention."
-        )
-    with col_sc2:
         cadence_option = st.selectbox(
-            "Daily Cadence",
+            "Schedule Cadence",
             options=["6 Shorts / Day (High Frequency)", "3 Shorts / Day (Conservative Peak)", "12 Shorts / Day (Hyper-growth)"],
-            index=0
+            index=0,
+            help="For Scheduled Publish: spreads clips across daily peak US/UK monetization windows."
         )
         slots_per_day = 6 if "6" in cadence_option else (12 if "12" in cadence_option else 3)
-
-    col_cfg1, col_cfg2 = st.columns([1, 1])
-    with col_cfg1:
-        batch_cap = st.slider("Max Upload Queue Limit", min_value=5, max_value=250, value=min(100, max(5, len(ready_videos))), step=5)
-    with col_cfg2:
-        upload_concurrency = st.radio(
-            "Upload Speed Optimizer",
-            options=[2, 1],
-            format_func=lambda x: "⚡ Turbo Parallel (2 Concurrent Streams - 2x Speed)" if x == 2 else "🐢 Sequential (1 Stream)",
+    with col_sc2:
+        instant_privacy = st.selectbox(
+            "Instant Visibility",
+            options=["public", "private", "unlisted"],
             index=0,
-            horizontal=True,
-            help="Turbo streams 2 videos simultaneously, saturating bandwidth and overlapping Google API roundtrips."
+            format_func=lambda x: f"🌐 {x.upper()} (Live Now)" if x == "public" else (f"🔒 {x.upper()} (Draft)" if x == "private" else f"🔗 {x.upper()} (Unlisted)"),
+            help="For Instant Publish: controls video visibility immediately upon upload."
+        )
+    with col_sc3:
+        upload_concurrency = st.selectbox(
+            "Concurrency",
+            options=[2, 1],
+            format_func=lambda x: f"⚡ {x} Parallel" if x == 2 else f"🐢 {x} Sequential",
+            index=0,
+            help="Turbo streams 2 videos simultaneously to maximize upload bandwidth."
         )
 
-    if auto_sched and ready_videos:
-        q_count = min(len(ready_videos), batch_cap)
-        days_span = max(1, (q_count + slots_per_day - 1) // slots_per_day)
-        st.caption(f"🗓️ **Calendar Schedule:** `{q_count}` Shorts will be scheduled across **{days_span} days** (~{slots_per_day}/day during peak US/UK hours).")
+    batch_cap = st.slider("Max Upload Queue Limit", min_value=5, max_value=250, value=min(100, max(5, len(ready_videos))), step=5)
 
-    # Upload Action Button
     target_upload_list = approved_videos if approved_videos else ready_videos
     upload_disabled = len(target_upload_list) == 0 or not yt_connected
-    upload_btn = st.button(
-        f"Upload & Schedule {min(len(target_upload_list), batch_cap)} Approved Shorts to YouTube" if auto_sched else f"Upload {min(len(target_upload_list), batch_cap)} Approved Shorts to YouTube (Private)",
-        type="primary",
-        disabled=upload_disabled,
-        use_container_width=True,
-        help="Uploads approved clips directly to your channel with private visibility or scheduled public release"
-    )
+    clip_count = min(len(target_upload_list), batch_cap)
 
-    if upload_btn:
+    if ready_videos:
+        days_span = max(1, (clip_count + slots_per_day - 1) // slots_per_day)
+        st.caption(f"🗓️ **Scheduled Horizon:** Spans `{clip_count}` clips across **{days_span} days** (~{slots_per_day}/day during peak US EST hours). | ⚡ **Instant Horizon:** Publishes `{clip_count}` clips immediately live as `{instant_privacy.upper()}`.")
+
+    # Two Primary Action Buttons: 1 for Instant Publish, 2 for Scheduled Publish
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
+        btn_instant = st.button(
+            f"⚡ Instant Publish ({clip_count} Clips)",
+            type="primary",
+            disabled=upload_disabled,
+            use_container_width=True,
+            help=f"Publishes {clip_count} clips immediately to YouTube as {instant_privacy.upper()} without calendar delays."
+        )
+    with btn_col2:
+        btn_schedule = st.button(
+            f"🗓️ Scheduled Publish ({clip_count} Clips)",
+            type="secondary",
+            disabled=upload_disabled,
+            use_container_width=True,
+            help=f"Uploads and spaces {clip_count} clips across peak monetization slots (~{slots_per_day}/day)."
+        )
+
+    if btn_instant or btn_schedule:
+        run_auto_sched = bool(btn_schedule)
+        target_privacy = "private" if run_auto_sched else instant_privacy
+        mode_label = f"🗓️ Scheduled ({slots_per_day}/day)" if run_auto_sched else f"⚡ Instant Publish ({target_privacy.upper()})"
+
         u_labor_box = st.empty()
         u_progress = st.progress(0.0)
         u_status = st.empty()
@@ -1930,7 +1945,7 @@ def render_upload_stage():
                         </div>
                         <div class="labor-pct">{ov_pct}%</div>
                     </div>
-                    <div class="labor-subtask">{curr_f} ({file_pct}%)</div>
+                    <div class="labor-subtask">{curr_f} ({file_pct}%) &bull; <b>{mode_label}</b></div>
                     <div class="labor-data-grid">
                         <div class="labor-data-cell">
                             <span class="labor-label">Transfer Speed</span>
@@ -1958,17 +1973,19 @@ def render_upload_stage():
         try:
             results = upload_batch_private(
                 max_batch_size=batch_cap,
-                auto_schedule=auto_sched,
+                auto_schedule=run_auto_sched,
                 slots_per_day=slots_per_day,
                 concurrency=upload_concurrency,
+                privacy_mode=target_privacy,
+                files_subset=target_upload_list[:batch_cap],
                 chunk_callback=on_upload_chunk,
                 log_callback=on_upload_log
             )
             u_progress.progress(1.0)
-            u_status.success(f"Successfully processed {len(results)} clips on YouTube!")
+            u_status.success(f"✓ Successfully processed {len(results)} clips on YouTube ({mode_label})!")
             if results:
                 for r in results:
-                    sched_note = f" (Scheduled: `{r['publish_at']}`)" if r.get("publish_at") else ""
+                    sched_note = f" (Scheduled: `{r['publish_at']}`)" if r.get("publish_at") else f" ({r.get('privacy_status', target_privacy).upper()})"
                     st.markdown(f"- **{r['title']}**{sched_note} &rarr; [Edit in YouTube Studio]({r['studio_url']})")
                 if st.button("Refresh Queue", key="refresh_after_up"):
                     st.rerun()
