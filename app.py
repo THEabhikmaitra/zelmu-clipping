@@ -2019,8 +2019,12 @@ def render_upload_stage():
                     st.markdown(f"- **{v_title}**{sched_note} &rarr; [Edit in YouTube Studio]({v_url})")
 
             if errors:
+                seen_errors = set()
                 for err_r in errors:
-                    st.warning(f"⚠️ {err_r.get('error')}")
+                    msg = err_r.get("error", "Upload interrupted")
+                    if msg not in seen_errors:
+                        seen_errors.add(msg)
+                        st.warning(f"{msg}")
 
             if not successful and not errors:
                 u_status.info("No clips were processed.")
@@ -2046,8 +2050,9 @@ def render_upload_stage():
         today_str = datetime.date.today().strftime("%Y-%m-%d")
         today_uploads = len(df[df["Timestamp"].astype(str).str.startswith(today_str)]) if "Timestamp" in df.columns else total_uploads
         
-        auth_slots_cnt = max(1, len([s for s in list_account_slots() if s["is_authenticated"]]))
-        daily_upload_cap = auth_slots_cnt * 100
+        auth_slots = [s for s in list_account_slots() if s["is_authenticated"]]
+        unique_channels = set(s.get("channel_handle") for s in auth_slots if s.get("channel_handle"))
+        daily_upload_cap = max(1, len(unique_channels)) * 100
         upload_pct = (today_uploads / daily_upload_cap) * 100.0 if daily_upload_cap > 0 else 0.0
 
         # Telemetry Data Grid

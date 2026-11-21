@@ -1195,24 +1195,38 @@ def upload_batch_private(
                 if file_name in active_transfers:
                     del active_transfers[file_name]
             err_msg = str(e)
-            if "quotaExceeded" in err_msg or "uploadLimitExceeded" in err_msg:
-                # Multi-Project Quota Rotator: auto-rotate to next available authorized slot
+            is_channel_limit = "uploadLimitExceeded" in err_msg or "exceeded the number of videos" in err_msg.lower()
+            is_api_quota = "quotaExceeded" in err_msg or "dailyLimitExceeded" in err_msg
+
+            if is_channel_limit or is_api_quota:
                 rotated = False
                 with lock:
-                    curr_slot = slots_pool[active_slot_idx] if slots_pool else {"name": "Default Slot", "slot_id": "default"}
+                    curr_slot = slots_pool[active_slot_idx] if slots_pool else {"name": "Default Slot", "slot_id": "default", "channel_handle": "@zelmuesports"}
                     mark_slot_quota_exhausted(curr_slot.get("slot_id", "default"))
-                    if slots_pool and active_slot_idx + 1 < len(slots_pool):
+
+                    # If channel limit hit, rotation only works if another slot targets a DIFFERENT YouTube channel
+                    if is_channel_limit:
+                        curr_handle = curr_slot.get("channel_handle", "@zelmuesports")
+                        diff_channel_slots = [
+                            (i, s) for i, s in enumerate(slots_pool)
+                            if i > active_slot_idx and s.get("channel_handle") and s.get("channel_handle") != curr_handle
+                        ]
+                        if diff_channel_slots:
+                            active_slot_idx = diff_channel_slots[0][0]
+                            next_slot = diff_channel_slots[0][1]
+                            rotated = True
+                    elif slots_pool and active_slot_idx + 1 < len(slots_pool):
                         active_slot_idx += 1
                         next_slot = slots_pool[active_slot_idx]
                         rotated = True
-                        if log_callback:
-                            log_callback(
-                                f"🔄 QUOTA LIMIT HIT (10,000 units) on '{curr_slot.get('name', 'Current Slot')}'. "
-                                f"Seamlessly auto-rotating to slot '{next_slot.get('name', 'Next Slot')}' "
-                                f"(Target channel: {next_slot.get('channel_handle', '@zelmuesports')})..."
-                            )
+
+                    if rotated and log_callback:
+                        log_callback(
+                            f"🔄 Auto-rotating to slot '{next_slot.get('name', 'Next Slot')}' "
+                            f"(Target channel: {next_slot.get('channel_handle', '@zelmuesports')})..."
+                        )
+
                 if rotated:
-                    # Retry uploading with the rotated token/client on target channel
                     next_tok = slots_pool[active_slot_idx]["token_path"]
                     yt_rotated = get_authenticated_service(next_tok)
                     try:
@@ -1229,8 +1243,8 @@ def upload_batch_private(
                         )
                     except Exception as retry_err:
                         quota_hit = True
-                        slot_cnt = len(slots_pool) if slots_pool else 1
-                        msg = f"Daily YouTube upload quota reached across configured slot(s) (retry error: {retry_err}) at clip #{idx+1}. Remaining clips safely saved in ready_to_upload/."
+                        clean_retry = "Channel upload limit reached (uploadLimitExceeded)" if "uploadLimitExceeded" in str(retry_err) else str(retry_err)[:100]
+                        msg = f"Daily upload limit reached across all slots ({clean_retry}). Remaining clips safely preserved in ready_to_upload/."
                         if log_callback:
                             log_callback(f"⚠️ {msg}")
                         return {
@@ -1242,11 +1256,19 @@ def upload_batch_private(
                         }
                 else:
                     quota_hit = True
-                    slot_cnt = len(slots_pool) if slots_pool else 1
-                    msg = (
-                        f"Daily YouTube upload quota reached across all {slot_cnt} configured account slot(s) "
-                        f"at clip #{idx+1}. Remaining clips safely saved in ready_to_upload/."
-                    )
+                    curr_handle = curr_slot.get("channel_handle", "@zelmuesports")
+                    if is_channel_limit:
+                        msg = (
+                            f"🛑 YouTube Channel Daily Upload Limit Reached: Channel {curr_handle} has reached YouTube's 24-hour upload ceiling "
+                            f"(~100 videos/24h per channel). Resets automatically on a rolling 24-hour cycle. "
+                            f"All remaining clips are 100% safely preserved in ready_to_upload/."
+                        )
+                    else:
+                        slot_cnt = len(slots_pool) if slots_pool else 1
+                        msg = (
+                            f"⚠️ Daily YouTube API quota (10,000 units) exhausted across all {slot_cnt} project slot(s). "
+                            f"Remaining clips safely saved in ready_to_upload/."
+                        )
                     if log_callback:
                         log_callback(f"⚠️ {msg}")
                     return {
