@@ -1195,8 +1195,8 @@ def upload_batch_private(
                 if file_name in active_transfers:
                     del active_transfers[file_name]
             err_msg = str(e)
-            is_channel_limit = "uploadLimitExceeded" in err_msg or "exceeded the number of videos" in err_msg.lower()
-            is_api_quota = "quotaExceeded" in err_msg or "dailyLimitExceeded" in err_msg
+            is_channel_limit = "uploadlimitexceeded" in err_msg.lower() or "exceeded the number of videos" in err_msg.lower()
+            is_api_quota = any(k in err_msg.lower() for k in ["quotaexceeded", "dailylimitexceeded", "ratelimitexceeded", "quota exceeded"])
 
             if is_channel_limit or is_api_quota:
                 rotated = False
@@ -1309,7 +1309,8 @@ def upload_batch_private(
                     if res:
                         results.append(res)
                 except Exception as err:
-                    if "quotaExceeded" in str(err) or "dailyLimitExceeded" in str(err):
+                    is_q_err = any(k in str(err).lower() for k in ["quotaexceeded", "dailylimitexceeded", "ratelimitexceeded", "quota exceeded"])
+                    if is_q_err:
                         raise err
                     if log_callback:
                         log_callback(f"⚠️ Video upload failed: {err}")
