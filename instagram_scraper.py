@@ -690,9 +690,9 @@ def process_instagram_reel(
         ass_file = work_dir / "subs.ass"
         words = []
         try:
-            from transcriber import get_whisper_model
-            model = get_whisper_model("base")
-            res = model.transcribe(str(audio_wav), word_timestamps=True)
+            from transcriber import transcribe_audio_whisper
+            t_json = work_dir / "transcript.json"
+            res = transcribe_audio_whisper(audio_path=audio_wav, output_json_path=t_json, model_size="tiny.en")
             for seg in res.get("segments", []):
                 for w in seg.get("words", []):
                     words.append({"word": w["word"], "start": w["start"], "end": w["end"]})

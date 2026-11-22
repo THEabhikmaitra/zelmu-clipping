@@ -2756,34 +2756,53 @@ def render_instagram_clipper():
 
     # 2. Crawler State & Live Sequential Progress
     st.markdown("<div class='section-title'>1-BY-1 SEQUENTIAL INGESTION DASHBOARD</div>", unsafe_allow_html=True)
+
+    @st.fragment(run_every=3 if is_crawler_active() else None)
+    def render_live_crawler_dashboard():
+        c_state = load_crawler_state()
+        crawler_status = c_state.get("status", "idle")
+        total_q = c_state.get("total_count", 0)
+        completed_q = len(c_state.get("completed_ids", []))
+        failed_q = len(c_state.get("failed_ids", []))
+        curr_cap = c_state.get("current_reel_caption", "None")
+
+        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        with kpi1:
+            status_badges = {
+                "running": "🟢 RUNNING (1-by-1)",
+                "paused": "⏸️ PAUSED",
+                "completed": "🏁 COMPLETED",
+                "idle": "⚪ IDLE"
+            }
+            st.metric("Crawler Status", status_badges.get(crawler_status, "⚪ IDLE"))
+        with kpi2:
+            st.metric("Progress", f"{completed_q} / {total_q} Completed")
+        with kpi3:
+            st.metric("Active Account", f"@{c_state.get('account', 'None')}")
+        with kpi4:
+            st.metric("Failed / Skipped", f"{failed_q}")
+
+        prog_pct = (completed_q / max(1, total_q)) if total_q > 0 else 0.0
+        st.progress(prog_pct)
+
+        if crawler_status == "running":
+            st.info(f"⏳ Currently downloading & processing: **'{curr_cap}'**...")
+
+        # Live Log Console
+        with st.expander("Live Sequential Ingestion Logs", expanded=(crawler_status == "running")):
+            insta_logs = get_insta_logs(30)
+            st.code("\n".join(insta_logs) if insta_logs else "No events logged yet.", language="log")
+
+        if completed_q > 0:
+            st.success(f"✓ {completed_q} clips ready in `ready_to_upload/` with YouTube SEO sidecars!")
+            st.markdown(
+                "👉 **Switch to Stage 3 (Quality & SEO Checklist)** to review monetization checks or approve for Studio upload."
+            )
+
+    render_live_crawler_dashboard()
+
     c_state = load_crawler_state()
     crawler_status = c_state.get("status", "idle")
-    total_q = c_state.get("total_count", 0)
-    completed_q = len(c_state.get("completed_ids", []))
-    failed_q = len(c_state.get("failed_ids", []))
-    curr_cap = c_state.get("current_reel_caption", "None")
-
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    with kpi1:
-        status_badges = {
-            "running": "🟢 RUNNING (1-by-1)",
-            "paused": "⏸️ PAUSED",
-            "completed": "🏁 COMPLETED",
-            "idle": "⚪ IDLE"
-        }
-        st.metric("Crawler Status", status_badges.get(crawler_status, "⚪ IDLE"))
-    with kpi2:
-        st.metric("Progress", f"{completed_q} / {total_q} Completed")
-    with kpi3:
-        st.metric("Active Account", f"@{c_state.get('account', 'None')}")
-    with kpi4:
-        st.metric("Failed / Skipped", f"{failed_q}")
-
-    prog_pct = (completed_q / max(1, total_q)) if total_q > 0 else 0.0
-    st.progress(prog_pct)
-
-    if crawler_status == "running":
-        st.info(f"⏳ Currently downloading & processing: **'{curr_cap}'**...")
 
     # Workflow Mode Selector
     proc_mode = st.radio(
@@ -2838,17 +2857,6 @@ def render_instagram_clipper():
     with btn_c4:
         if st.button("🔄 Refresh Status", use_container_width=True, key="btn_refresh_crawler_status"):
             st.rerun()
-
-    # 3. Live Log Console
-    with st.expander("Live Sequential Ingestion Logs", expanded=(crawler_status == "running")):
-        insta_logs = get_insta_logs(30)
-        st.code("\n".join(insta_logs) if insta_logs else "No events logged yet.", language="log")
-
-    if completed_q > 0:
-        st.success(f"✓ {completed_q} clips ready in `ready_to_upload/` with YouTube SEO sidecars!")
-        st.markdown(
-            "👉 [Switch to Stage 3 (Quality & SEO Checklist)](javascript:void(0)) to review monetization checks or approve for Studio upload."
-        )
 
 
 def render_campaign_clipper():
