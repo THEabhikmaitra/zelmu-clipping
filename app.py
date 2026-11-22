@@ -2069,8 +2069,7 @@ def render_upload_stage():
         today_uploads = len(df[df["Timestamp"].astype(str).str.startswith(today_str)]) if "Timestamp" in df.columns else total_uploads
         
         auth_slots = [s for s in list_account_slots() if s["is_authenticated"]]
-        unique_channels = set(s.get("channel_handle") for s in auth_slots if s.get("channel_handle"))
-        daily_upload_cap = max(1, len(unique_channels)) * 100
+        daily_upload_cap = max(1, len(auth_slots)) * 100
         upload_pct = (today_uploads / daily_upload_cap) * 100.0 if daily_upload_cap > 0 else 0.0
 
         # Telemetry Data Grid
@@ -2088,9 +2087,9 @@ def render_upload_stage():
             st.metric("Daily Upload Quota", f"{today_uploads} / {daily_upload_cap} clips", delta=f"{upload_pct:.1f}% used")
 
         if today_uploads >= int(daily_upload_cap * 0.9):
-            st.warning(f"⚠️ High Quota Utilization: {today_uploads}/{daily_upload_cap} daily uploads used today ({upload_pct:.0f}%). Add more project slots in the pool to expand limit.")
+            st.warning(f"⚠️ High Quota Utilization: {today_uploads}/{daily_upload_cap} daily uploads used today ({upload_pct:.0f}% across {len(auth_slots)} project slot(s)). Add more project slots in the pool to expand limit.")
         else:
-            st.caption(f"✓ GCP Quota Status: **{today_uploads}/{daily_upload_cap} uploads today** ({upload_pct:.1f}% used). Limit: 100 uploads/day per project.")
+            st.caption(f"✓ GCP Quota Status: **{today_uploads}/{daily_upload_cap} uploads today across {len(auth_slots)} project slot(s)** ({upload_pct:.1f}% used). Limit: 100 uploads/day per GCP project.")
 
         st.dataframe(
             df,

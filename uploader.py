@@ -128,7 +128,8 @@ def list_account_slots() -> List[Dict[str, Any]]:
             "channel_title": ch_title,
             "channel_handle": ch_handle,
             "status": status,
-            "quota_exceeded": quota_hit
+            "quota_exceeded": quota_hit,
+            "quota_exhausted": quota_hit
         })
 
     # 2. Search for additional client_secrets_*.json in tokens/ and root
@@ -185,7 +186,8 @@ def list_account_slots() -> List[Dict[str, Any]]:
             "channel_title": ch_title,
             "channel_handle": ch_handle,
             "status": status,
-            "quota_exceeded": quota_hit
+            "quota_exceeded": quota_hit,
+            "quota_exhausted": quota_hit
         })
 
     # 3. Check for any standalone token_*.json in tokens/
@@ -222,7 +224,8 @@ def list_account_slots() -> List[Dict[str, Any]]:
             "channel_title": ch_title,
             "channel_handle": ch_handle,
             "status": "Connected & Active" if is_auth else "Token Expired",
-            "quota_exceeded": slot_id in _EXHAUSTED_SLOT_IDS
+            "quota_exceeded": slot_id in _EXHAUSTED_SLOT_IDS,
+            "quota_exhausted": slot_id in _EXHAUSTED_SLOT_IDS
         })
 
     return slots
@@ -1134,7 +1137,7 @@ def upload_batch_private(
                 pass
 
     slots_pool = [s for s in list_account_slots() if s["is_authenticated"]]
-    unexhausted = [i for i, s in enumerate(slots_pool) if not s.get("quota_exhausted")]
+    unexhausted = [i for i, s in enumerate(slots_pool) if not (s.get("quota_exceeded") or s.get("quota_exhausted"))]
     active_slot_idx = unexhausted[0] if unexhausted else 0
 
     def get_current_thread_client():
@@ -1245,10 +1248,15 @@ def upload_batch_private(
                             active_slot_idx = diff_channel_slots[0][0]
                             next_slot = diff_channel_slots[0][1]
                             rotated = True
-                    elif slots_pool and active_slot_idx + 1 < len(slots_pool):
-                        active_slot_idx += 1
-                        next_slot = slots_pool[active_slot_idx]
-                        rotated = True
+                    elif slots_pool:
+                        candidate_slots = [
+                            (i, s) for i, s in enumerate(slots_pool)
+                            if i != active_slot_idx and not (s.get("quota_exceeded") or s.get("quota_exhausted"))
+                        ]
+                        if candidate_slots:
+                            active_slot_idx = candidate_slots[0][0]
+                            next_slot = candidate_slots[0][1]
+                            rotated = True
 
                     if rotated and log_callback:
                         log_callback(
