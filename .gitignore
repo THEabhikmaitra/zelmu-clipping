@@ -51,3 +51,12 @@ Thumbs.db
 *_config.json
 learning_db.json
 upload_history.json
+campaigns_db.json
+contentrewards_cache.json
+exhausted_slots.json
+scratch/
+
+# TikTok Sensitive Auth & Debug Captures
+tiktok_cookies.*
+tiktok_*.png
+*.png
