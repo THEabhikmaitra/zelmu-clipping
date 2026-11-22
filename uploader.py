@@ -1,6 +1,8 @@
 import os
 import csv
 import json
+import time
+import datetime
 import shutil
 import urllib.parse
 import re
@@ -28,17 +30,43 @@ DEFAULT_REDIRECT_URI = "http://localhost:8080/"
 
 # In-memory tracking for channel info cache & quota-exhausted slots
 _CHANNEL_INFO_CACHE: Dict[str, Any] = {}
-_EXHAUSTED_SLOT_IDS = set()
+EXHAUSTED_SLOTS_FILE = Path("exhausted_slots.json")
+
+
+def _load_exhausted_slots() -> set:
+    if not EXHAUSTED_SLOTS_FILE.exists():
+        return set()
+    try:
+        with open(EXHAUSTED_SLOTS_FILE, "r", encoding="utf-8") as f:
+            d = json.load(f)
+            today = datetime.datetime.now().strftime("%Y-%m-%d")
+            if d.get("date") == today:
+                return set(d.get("exhausted_slots", []))
+    except Exception:
+        pass
+    return set()
+
+
+def _save_exhausted_slots(s: set):
+    try:
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        with open(EXHAUSTED_SLOTS_FILE, "w", encoding="utf-8") as f:
+            json.dump({"date": today, "exhausted_slots": list(s)}, f, indent=2)
+    except Exception:
+        pass
 
 
 def mark_slot_quota_exhausted(slot_id: str):
     """Marks an account slot as having hit its daily 10k quota."""
-    _EXHAUSTED_SLOT_IDS.add(slot_id)
+    s = _load_exhausted_slots()
+    s.add(slot_id)
+    _save_exhausted_slots(s)
 
 
 def reset_exhausted_slots():
     """Resets daily exhausted quota tracking."""
-    _EXHAUSTED_SLOT_IDS.clear()
+    if EXHAUSTED_SLOTS_FILE.exists():
+        EXHAUSTED_SLOTS_FILE.unlink(missing_ok=True)
 
 
 def list_account_slots() -> List[Dict[str, Any]]:
@@ -49,6 +77,7 @@ def list_account_slots() -> List[Dict[str, Any]]:
     TOKENS_DIR.mkdir(parents=True, exist_ok=True)
     slots = []
     seen_slot_ids = set()
+    exhausted_set = _load_exhausted_slots()
 
     # 1. Primary/Default Slot
     default_sec = CLIENT_SECRETS_FILE if CLIENT_SECRETS_FILE.exists() else (
@@ -78,7 +107,7 @@ def list_account_slots() -> List[Dict[str, Any]]:
             ch_title = info.get("title", "YouTube Channel")
             ch_handle = info.get("customUrl", "") or "@zelmuesports"
 
-        quota_hit = "default" in _EXHAUSTED_SLOT_IDS
+        quota_hit = "default" in exhausted_set
         if quota_hit:
             status = "Quota Limit Reached (10k)"
         elif is_auth:
@@ -136,7 +165,7 @@ def list_account_slots() -> List[Dict[str, Any]]:
             ch_title = info.get("title", "YouTube Channel")
             ch_handle = info.get("customUrl", "") or "@zelmuesports"
 
-        quota_hit = slot_id in _EXHAUSTED_SLOT_IDS
+        quota_hit = slot_id in exhausted_set
         if quota_hit:
             status = "Quota Limit Reached (10k)"
         elif is_auth:
@@ -1105,7 +1134,8 @@ def upload_batch_private(
                 pass
 
     slots_pool = [s for s in list_account_slots() if s["is_authenticated"]]
-    active_slot_idx = 0
+    unexhausted = [i for i, s in enumerate(slots_pool) if not s.get("quota_exhausted")]
+    active_slot_idx = unexhausted[0] if unexhausted else 0
 
     def get_current_thread_client():
         with lock:
