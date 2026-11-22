@@ -775,25 +775,142 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # Watermark & Maintenance Popover (Triggered by ⚙️ Icon in Top Fixed Nav)
+from editor import get_watermark_config, save_watermark_config, get_active_watermark_overlay
+
 active_logo_path = Path("logo.png") if Path("logo.png").exists() else None
 
 with st.popover("⚙️", help="Settings & Module Maintenance"):
     pop_tab1, pop_tab2 = st.tabs(["🎨 Watermark", "🗑️ Purge Modules & Videos"])
     with pop_tab1:
-        st.caption("WATERMARK OVERLAY")
-        logo_file = st.file_uploader("Upload PNG/JPG", type=["png", "jpg", "jpeg"], key="wm_uploader_gear")
+        st.markdown("<div class='section-title'>GLOBAL WATERMARK & LOGO OVERLAY</div>", unsafe_allow_html=True)
+        wm_cfg = get_watermark_config()
+        logo_exists = Path("logo.png").exists()
+
+        # 1. Master Optional Toggle
+        wm_master_enabled = st.toggle(
+            "Enable Logo Watermark for All Video Pipelines",
+            value=wm_cfg.get("enabled", True) if logo_exists else False,
+            disabled=not logo_exists,
+            help="Toggles logo overlay across Instagram Clipper, Trend Factory, VOD Watcher, and Live Buffer.",
+            key="wm_master_toggle_gear"
+        )
+        if logo_exists and wm_master_enabled != wm_cfg.get("enabled", True):
+            wm_cfg["enabled"] = wm_master_enabled
+            save_watermark_config(wm_cfg)
+            st.rerun()
+
+        # 2. Upload / Replace Logo File
+        logo_uploader_label = "Replace Watermark (PNG/JPG)" if logo_exists else "Upload Watermark (PNG/JPG)"
+        logo_file = st.file_uploader(logo_uploader_label, type=["png", "jpg", "jpeg"], key="wm_uploader_gear")
         if logo_file is not None:
             active_logo_path = Path("logo.png")
             with open(active_logo_path, "wb") as f:
                 f.write(logo_file.read())
-            st.success("Logo saved!")
+            wm_cfg["logo_path"] = "logo.png"
+            wm_cfg["enabled"] = True
+            save_watermark_config(wm_cfg)
+            st.success("Logo saved and enabled!")
             st.rerun()
 
-        if Path("logo.png").exists():
-            st.image("logo.png", caption="Active Watermark", width=90)
-            if st.button("Remove Watermark", type="secondary", use_container_width=True, key="wm_btn_remove_gear"):
+        if logo_exists:
+            if wm_master_enabled:
+                # 3. Position Preset
+                pos_map = {
+                    "Top-Right (Default Safe Zone)": "top-right",
+                    "Top-Left": "top-left",
+                    "Bottom-Right": "bottom-right",
+                    "Bottom-Left": "bottom-left",
+                    "Top-Center": "top-center",
+                    "Bottom-Center": "bottom-center",
+                    "Center": "center"
+                }
+                cur_pos_key = wm_cfg.get("position", "top-right")
+                labels = list(pos_map.keys())
+                vals = list(pos_map.values())
+                cur_idx = vals.index(cur_pos_key) if cur_pos_key in vals else 0
+                chosen_pos_label = st.selectbox("Position on Video", labels, index=cur_idx, key="wm_pos_gear")
+                chosen_pos = pos_map[chosen_pos_label]
+
+                # 4. Size & Opacity
+                w_col1, w_col2 = st.columns(2)
+                with w_col1:
+                    chosen_size = st.slider("Logo Size (Width px)", 50, 350, int(wm_cfg.get("size_px", 150)), step=10, key="wm_size_gear")
+                with w_col2:
+                    chosen_opacity = st.slider("Opacity (%)", 10, 100, int(wm_cfg.get("opacity", 0.85) * 100), step=5, key="wm_opacity_gear")
+
+                # 5. Advanced Safe Zone Margins
+                with st.expander("🛠️ Advanced Margins (Safe Zone Offsets)", expanded=False):
+                    m_col1, m_col2 = st.columns(2)
+                    with m_col1:
+                        chosen_mx = st.number_input("Margin X (px)", 0, 250, int(wm_cfg.get("margin_x", 40)), step=5, key="wm_mx_gear")
+                    with m_col2:
+                        chosen_my = st.number_input("Margin Y (px)", 0, 500, int(wm_cfg.get("margin_y", 180)), step=10, key="wm_my_gear", help="Keeps logo out of YouTube Shorts top header and bottom captions")
+
+                # Auto-persist when parameters change
+                new_opacity_f = round(chosen_opacity / 100.0, 2)
+                if (chosen_pos != cur_pos_key or
+                    chosen_size != wm_cfg.get("size_px") or
+                    new_opacity_f != wm_cfg.get("opacity") or
+                    chosen_mx != wm_cfg.get("margin_x") or
+                    chosen_my != wm_cfg.get("margin_y")):
+                    wm_cfg["position"] = chosen_pos
+                    wm_cfg["size_px"] = chosen_size
+                    wm_cfg["opacity"] = new_opacity_f
+                    wm_cfg["margin_x"] = chosen_mx
+                    wm_cfg["margin_y"] = chosen_my
+                    save_watermark_config(wm_cfg)
+                    st.rerun()
+
+                # 6. Live 9:16 Mock Visual Preview
+                import base64
+                try:
+                    with open("logo.png", "rb") as f:
+                        b64_img = base64.b64encode(f.read()).decode("utf-8")
+                    img_src = f"data:image/png;base64,{b64_img}"
+                    pw, ph = 112, 199  # ~9:16 aspect ratio preview card
+                    ratio = pw / 1080.0
+                    prev_w = max(14, int(chosen_size * ratio))
+                    prev_mx = int(chosen_mx * ratio)
+                    prev_my = int(chosen_my * ratio)
+
+                    if chosen_pos == "top-left":
+                        p_style = f"top: {prev_my}px; left: {prev_mx}px;"
+                    elif chosen_pos == "bottom-right":
+                        p_style = f"bottom: {prev_my}px; right: {prev_mx}px;"
+                    elif chosen_pos == "bottom-left":
+                        p_style = f"bottom: {prev_my}px; left: {prev_mx}px;"
+                    elif chosen_pos == "top-center":
+                        p_style = f"top: {prev_my}px; left: 50%; transform: translateX(-50%);"
+                    elif chosen_pos == "bottom-center":
+                        p_style = f"bottom: {prev_my}px; left: 50%; transform: translateX(-50%);"
+                    elif chosen_pos == "center":
+                        p_style = f"top: 50%; left: 50%; transform: translate(-50%, -50%);"
+                    else:  # top-right
+                        p_style = f"top: {prev_my}px; right: {prev_mx}px;"
+
+                    st.markdown(f"""
+                    <div style="margin: 0.6rem 0; display: flex; flex-direction: column; align-items: center;">
+                        <span style="font-size: 0.65rem; color: #71717a; text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em; margin-bottom: 4px;">Live 9:16 Canvas Preview</span>
+                        <div style="position: relative; width: {pw}px; height: {ph}px; background: #0c0c0e; border: 1px solid #3f3f46; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.6);">
+                            <div style="position: absolute; top: 8px; left: 6px; right: 6px; height: 10px; background: rgba(255,255,255,0.06); border-radius: 2px;"></div>
+                            <div style="position: absolute; bottom: 12px; left: 6px; right: 6px; height: 14px; background: rgba(255,255,255,0.05); border-radius: 2px;"></div>
+                            <img src="{img_src}" style="position: absolute; {p_style} width: {prev_w}px; height: auto; opacity: {new_opacity_f}; pointer-events: none;" />
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                except Exception:
+                    pass
+
+            else:
+                st.info("Watermark is toggled OFF. Videos will export cleanly without logo overlay.")
+
+            if st.button("Delete Watermark File", type="secondary", use_container_width=True, key="wm_btn_remove_gear"):
                 Path("logo.png").unlink(missing_ok=True)
+                wm_cfg["enabled"] = False
+                save_watermark_config(wm_cfg)
                 st.rerun()
+        else:
+            st.caption("Upload a PNG or JPG to enable branded watermark overlay on all generated Shorts.")
 
     with pop_tab2:
         render_module_purge_matrix(key_prefix="top_gear_purge")

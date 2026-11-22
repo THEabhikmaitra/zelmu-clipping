@@ -717,15 +717,33 @@ def process_instagram_reel(
         )
     else:
         log("⚡ Fast Direct Repurpose: Normalizing to 1080x1920 MP4...")
-        vf = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
-        cmd = [
-            ffmpeg_bin, "-y",
-            "-i", str(raw_mp4),
-            "-vf", vf,
-            *get_best_video_encoder(),
-            "-c:a", "aac", "-b:a", "128k",
-            str(final_mp4)
-        ]
+        vf_base = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
+        from editor import get_active_watermark_overlay
+        wm_overlay = get_active_watermark_overlay()
+
+        if wm_overlay:
+            actual_logo_path, logo_prep, logo_coords = wm_overlay
+            fc = f"[0:v]{vf_base}[v_base];[1:v]{logo_prep}[logo];[v_base][logo]overlay={logo_coords}[v_out]"
+            cmd = [
+                ffmpeg_bin, "-y",
+                "-i", str(raw_mp4),
+                "-i", str(actual_logo_path.resolve()),
+                "-filter_complex", fc,
+                "-map", "[v_out]",
+                "-map", "0:a?",
+                *get_best_video_encoder(),
+                "-c:a", "aac", "-b:a", "128k",
+                str(final_mp4)
+            ]
+        else:
+            cmd = [
+                ffmpeg_bin, "-y",
+                "-i", str(raw_mp4),
+                "-vf", vf_base,
+                *get_best_video_encoder(),
+                "-c:a", "aac", "-b:a", "128k",
+                str(final_mp4)
+            ]
         subprocess.run(cmd, capture_output=True)
 
     if not is_valid_video_file(final_mp4):

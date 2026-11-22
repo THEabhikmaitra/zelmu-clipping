@@ -438,6 +438,77 @@ def generate_piper_tts(
 
     return output_wav_path
 
+def get_watermark_config() -> Dict[str, Any]:
+    """Loads persistent watermark configuration."""
+    defaults = {
+        "enabled": True,
+        "logo_path": "logo.png",
+        "position": "top-right",
+        "size_px": 150,
+        "opacity": 0.85,
+        "margin_x": 40,
+        "margin_y": 180
+    }
+    cfg_file = Path("watermark_config.json")
+    if cfg_file.exists():
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                defaults.update(data)
+        except Exception:
+            pass
+    return defaults
+
+def save_watermark_config(cfg: Dict[str, Any]) -> None:
+    """Saves persistent watermark configuration."""
+    cfg_file = Path("watermark_config.json")
+    try:
+        with open(cfg_file, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception:
+        pass
+
+def get_active_watermark_overlay(override_path: Optional[Path] = None) -> Optional[Tuple[Path, str, str]]:
+    """
+    Returns (logo_file, scale_filter, overlay_coordinates) if watermark is enabled and exists.
+    Returns None if disabled or file missing.
+    """
+    cfg = get_watermark_config()
+    if not cfg.get("enabled", True):
+        return None
+
+    logo_file = override_path or Path(cfg.get("logo_path", "logo.png"))
+    if not logo_file.exists():
+        return None
+
+    size_px = max(40, min(600, int(cfg.get("size_px", 150))))
+    opacity = max(0.05, min(1.0, float(cfg.get("opacity", 0.85))))
+    margin_x = max(0, int(cfg.get("margin_x", 40)))
+    margin_y = max(0, int(cfg.get("margin_y", 180)))
+    pos = str(cfg.get("position", "top-right")).lower().strip()
+
+    if pos in ("top-left", "tl"):
+        coords = f"x={margin_x}:y={margin_y}"
+    elif pos in ("bottom-right", "br"):
+        coords = f"x=W-w-{margin_x}:y=H-h-{margin_y}"
+    elif pos in ("bottom-left", "bl"):
+        coords = f"x={margin_x}:y=H-h-{margin_y}"
+    elif pos in ("top-center", "tc"):
+        coords = f"x=(W-w)/2:y={margin_y}"
+    elif pos in ("bottom-center", "bc"):
+        coords = f"x=(W-w)/2:y=H-h-{margin_y}"
+    elif pos in ("center", "c"):
+        coords = f"x=(W-w)/2:y=(H-h)/2"
+    else:  # default top-right safe zone
+        coords = f"x=W-w-{margin_x}:y={margin_y}"
+
+    if opacity < 0.99:
+        prep_filter = f"scale={size_px}:-1,format=rgba,colorchannelmixer=aa={opacity:.2f}"
+    else:
+        prep_filter = f"scale={size_px}:-1"
+
+    return (logo_file, prep_filter, coords)
+
 def render_mode_a_short(
     source_video: Path,
     ass_subtitles: Path,
@@ -472,7 +543,15 @@ def render_mode_a_short(
     ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
     esc_sub = escape_ffmpeg_path(ass_subtitles)
 
-    has_logo = logo_path and Path(logo_path).exists()
+    # Configurable & optional watermark overlay
+    wm_overlay = None
+    if logo_path is not False:
+        if logo_path and Path(logo_path).exists():
+            wm_overlay = get_active_watermark_overlay(override_path=Path(logo_path))
+        else:
+            wm_overlay = get_active_watermark_overlay()
+
+    has_logo = wm_overlay is not None
     sfx_file = Path("assets/sfx/whoosh.wav")
     has_sfx = enable_sfx and sfx_file.exists()
     # HARD RULE: Background songs/music permanently disabled to guarantee 0% Content ID copyright claims
@@ -542,7 +621,8 @@ def render_mode_a_short(
     input_count = 1
 
     if has_logo:
-        input_args.extend(["-i", str(Path(logo_path).resolve())])
+        actual_logo_path, logo_prep, logo_coords = wm_overlay
+        input_args.extend(["-i", str(actual_logo_path.resolve())])
         logo_idx = input_count
         input_count += 1
     else:
@@ -567,7 +647,12 @@ def render_mode_a_short(
     v_out_label = "[v_out]"
 
     if has_logo:
-        fc_parts.append(f"{base_filter}[v_base];[{logo_idx}:v]scale=150:-1[logo];[v_base][logo]overlay=W-w-50:220{v_out_label}")
+        actual_logo_path, logo_prep, logo_coords = wm_overlay
+        fc_parts.append(
+            f"{base_filter}[v_base];"
+            f"[{logo_idx}:v]{logo_prep}[logo];"
+            f"[v_base][logo]overlay={logo_coords}{v_out_label}"
+        )
     else:
         fc_parts.append(f"{base_filter}{v_out_label}")
 
@@ -693,15 +778,23 @@ def render_mode_b_short(
     subprocess.run(cat_cmd, capture_output=True, timeout=60)
 
     # Step 3: Pure narration audio overlay (strictly omit input 0 audio to eliminate background song copyright claims)
-    has_logo = logo_path and Path(logo_path).exists()
+    wm_overlay = None
+    if logo_path is not False:
+        if logo_path and Path(logo_path).exists():
+            wm_overlay = get_active_watermark_overlay(override_path=Path(logo_path))
+        else:
+            wm_overlay = get_active_watermark_overlay()
+
+    has_logo = wm_overlay is not None
     mix_inputs = [
         "-i", str(concatenated_raw.resolve()),
         "-i", str(narration_audio.resolve())
     ]
 
     if has_logo:
-        mix_inputs.extend(["-i", str(Path(logo_path).resolve())])
-        fc = "[0:v][2:v]overlay=W-w-50:220[v_out]"
+        actual_logo_path, logo_prep, logo_coords = wm_overlay
+        mix_inputs.extend(["-i", str(actual_logo_path.resolve())])
+        fc = f"[2:v]{logo_prep}[logo];[0:v][logo]overlay={logo_coords}[v_out]"
         map_args = ["-map", "[v_out]", "-map", "1:a:0"]
         c_v_args = get_best_video_encoder()
         fc_args = ["-filter_complex", fc]
