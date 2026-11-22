@@ -235,12 +235,20 @@ st.markdown("""
         align-items: center;
         justify-content: space-between;
         box-sizing: border-box;
+        pointer-events: none;
+    }
+    .zelmu-brand {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        pointer-events: auto;
     }
     .navbar-status-group {
         display: flex;
         align-items: center;
         gap: 0.85rem;
         margin-right: 48px; /* Room for gear icon */
+        pointer-events: auto;
     }
 
     /* Instant Top Tabs (beside ZELMU logo in fixed top navbar) */
@@ -249,7 +257,8 @@ st.markdown("""
         position: fixed !important;
         top: 8px !important;
         left: 170px !important;
-        z-index: 1004 !important;
+        z-index: 1006 !important;
+        pointer-events: auto !important;
         background: #121215 !important;
         border: 1px solid #27272a !important;
         border-radius: 6px !important;
@@ -323,7 +332,7 @@ st.markdown("""
         right: 14px !important;
         width: 32px !important;
         height: 32px !important;
-        z-index: 1005 !important;
+        z-index: 1007 !important;
         margin: 0 !important;
         padding: 0 !important;
         pointer-events: auto !important;
@@ -336,7 +345,7 @@ st.markdown("""
         height: 32px !important;
         min-width: 32px !important;
         max-width: 32px !important;
-        z-index: 1005 !important;
+        z-index: 1007 !important;
         margin: 0 !important;
         padding: 0 !important;
         pointer-events: auto !important;
