@@ -1181,6 +1181,9 @@ def render_manual_clipper():
         elif "First 30" in scan_window:
             max_scan_sec = 1800.0
 
+        from portal_stages import render_watermark_options_expander
+        render_watermark_options_expander("manual", "Manual Clipper")
+
     # Internet Disconnect Pause / Resume Banner
     if st.session_state.get("pipeline_paused"):
         online = check_internet_connection()
@@ -2316,6 +2319,9 @@ def render_vod_watcher():
         save_watcher_config(watcher_cfg)
         st.success("✓ Saved")
 
+    from portal_stages import render_watermark_options_expander
+    render_watermark_options_expander("vod", "VOD Watcher")
+
     # Live Real-Time Autopilot Stage & Progress Telemetry (Auto-updates every 3s)
     @st.fragment(run_every="3s")
     def render_autopilot_live_telemetry():
@@ -2435,6 +2441,9 @@ def render_live_buffer():
         live_cfg["enable_hook_badge"] = live_hook
         save_livestream_config(live_cfg)
         st.success("✓ Saved")
+
+    from portal_stages import render_watermark_options_expander
+    render_watermark_options_expander("live", "Live Buffer Clipper")
 
     # Live Real-Time Telemetry for Tab 4
     @st.fragment(run_every="3s")
@@ -2686,6 +2695,9 @@ def render_trend_factory():
             save_daemon_config(d_cfg)
             st.success("Saved")
 
+    from portal_stages import render_watermark_options_expander
+    render_watermark_options_expander("trend_factory", "Trend Factory")
+
     @st.fragment(run_every="3s")
     def render_trend_daemon_telemetry_box():
         t_prog = get_daemon_progress()
@@ -2879,6 +2891,9 @@ def render_instagram_clipper():
             f"*(Alternatively: paste individual Reel URLs directly into the target input box separated by commas or newlines.)*"
         )
 
+
+    from portal_stages import render_watermark_options_expander
+    render_watermark_options_expander("insta", "Instagram Clipper")
 
     # 2. Crawler State & Live Sequential Progress
     st.markdown("<div class='section-title'>1-BY-1 SEQUENTIAL INGESTION DASHBOARD</div>", unsafe_allow_html=True)
@@ -3123,6 +3138,9 @@ def render_campaign_clipper():
         st.markdown(f"**Campaign:** `{active_camp.get('name')}` &bull; [Inspect Live on ContentRewards ↗]({active_camp.get('sponsor_link', 'https://contentrewards.com')})")
         full_desc = active_camp.get("description_brief", "No detailed description provided.")
         st.info(full_desc)
+
+    from portal_stages import render_watermark_options_expander
+    render_watermark_options_expander("campaign", "Campaign Clipper")
 
     # Campaign Clipping Engine
     st.markdown("<div class='section-title'>⚡ 1-CLICK CAMPAIGN CLIPPING GENERATOR</div>", unsafe_allow_html=True)

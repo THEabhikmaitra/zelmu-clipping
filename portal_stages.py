@@ -329,6 +329,100 @@ def purge_system_targets(selected_targets: List[str], ready_dir: Path = Path("re
     return counts
 
 
+def render_watermark_options_expander(key_prefix: str, module_name: str = "Video"):
+    """
+    Renders modular watermark controls for any pipeline:
+    - Master toggle (Optional ON/OFF).
+    - Position presets (Top-Right, Top-Left, Bottom-Right, Bottom-Left, Top-Center, Bottom-Center, Center).
+    - Size slider (50px to 350px).
+    - Opacity slider (10% to 100%).
+    - Safe zone margin offsets (X/Y px).
+    - Inline logo uploader & thumbnail preview.
+    - Synchronized with watermark_config.json.
+    """
+    from editor import get_watermark_config, save_watermark_config
+    cfg = get_watermark_config()
+    logo_file = Path(cfg.get("logo_path", "logo.png"))
+    logo_exists = logo_file.exists()
+
+    status_str = f"🟢 ACTIVE ({cfg.get('position', 'top-right').title()} • {cfg.get('size_px', 150)}px)" if (logo_exists and cfg.get("enabled", True)) else "⚪ OPTIONAL (Disabled)"
+
+    with st.expander(f"🎨 Watermark & Logo Overlay [{status_str}]", expanded=False):
+        wm_enabled = st.checkbox(
+            f"Apply Brand Logo to {module_name} Exports",
+            value=cfg.get("enabled", True) if logo_exists else False,
+            disabled=not logo_exists,
+            help=f"When enabled, burns brand logo into all {module_name} videos at configured position.",
+            key=f"wm_chk_{key_prefix}"
+        )
+        if logo_exists and wm_enabled != cfg.get("enabled", True):
+            cfg["enabled"] = wm_enabled
+            save_watermark_config(cfg)
+            st.rerun()
+
+        if not logo_exists:
+            st.caption("⚠️ No logo active. Upload a PNG/JPG below to enable brand overlay:")
+            up_f = st.file_uploader("Upload Watermark", type=["png", "jpg", "jpeg"], key=f"wm_up_{key_prefix}")
+            if up_f is not None:
+                with open("logo.png", "wb") as f:
+                    f.write(up_f.read())
+                cfg["enabled"] = True
+                cfg["logo_path"] = "logo.png"
+                save_watermark_config(cfg)
+                st.success("Logo uploaded and enabled!")
+                st.rerun()
+            return
+
+        if wm_enabled:
+            pos_map = {
+                "Top-Right (Default Safe Zone)": "top-right",
+                "Top-Left": "top-left",
+                "Bottom-Right": "bottom-right",
+                "Bottom-Left": "bottom-left",
+                "Top-Center": "top-center",
+                "Bottom-Center": "bottom-center",
+                "Center": "center"
+            }
+            cur_pos = cfg.get("position", "top-right")
+            pos_labels = list(pos_map.keys())
+            pos_vals = list(pos_map.values())
+            sel_idx = pos_vals.index(cur_pos) if cur_pos in pos_vals else 0
+
+            c_pos, c_size, c_op = st.columns([1.4, 1, 1])
+            with c_pos:
+                chosen_pos_label = st.selectbox("Position", pos_labels, index=sel_idx, key=f"wm_pos_{key_prefix}")
+                chosen_pos = pos_map[chosen_pos_label]
+            with c_size:
+                chosen_size = st.slider("Size (px)", 50, 350, int(cfg.get("size_px", 150)), step=10, key=f"wm_size_{key_prefix}")
+            with c_op:
+                chosen_op = st.slider("Opacity (%)", 10, 100, int(cfg.get("opacity", 0.85) * 100), step=5, key=f"wm_op_{key_prefix}")
+
+            # Advanced Offsets
+            m1, m2 = st.columns(2)
+            with m1:
+                mx = st.number_input("Margin X (px)", 0, 250, int(cfg.get("margin_x", 40)), step=5, key=f"wm_mx_{key_prefix}")
+            with m2:
+                my = st.number_input("Margin Y (px)", 0, 500, int(cfg.get("margin_y", 180)), step=10, key=f"wm_my_{key_prefix}", help="Avoids top YouTube search bar and bottom caption/title zones")
+
+            new_op_f = round(chosen_op / 100.0, 2)
+            if (chosen_pos != cur_pos or
+                chosen_size != cfg.get("size_px") or
+                new_op_f != cfg.get("opacity") or
+                mx != cfg.get("margin_x") or
+                my != cfg.get("margin_y")):
+                cfg["position"] = chosen_pos
+                cfg["size_px"] = chosen_size
+                cfg["opacity"] = new_op_f
+                cfg["margin_x"] = mx
+                cfg["margin_y"] = my
+                save_watermark_config(cfg)
+                st.rerun()
+
+            st.caption(f"✓ Logo active at `{chosen_pos}` ({chosen_size}px, {chosen_op}% opacity). Configure globally anytime via ⚙️ Settings.")
+        else:
+            st.info(f"Logo watermark is disabled for {module_name} exports. Check the box above to enable.")
+
+
 def render_module_purge_matrix(key_prefix: str = "purge"):
     """
     Renders the Checkbox Selection Matrix for clearing individual or all modules,
