@@ -78,6 +78,7 @@ from instagram_scraper import (
     pause_crawler,
     reset_crawler,
     load_crawler_state,
+    save_crawler_state,
     is_crawler_active,
     get_insta_logs,
     save_session_cookie,
