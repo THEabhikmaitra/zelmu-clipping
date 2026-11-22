@@ -867,8 +867,9 @@ def start_or_resume_crawler(
     with _LOCK:
         state = load_crawler_state()
 
-        # If already paused for this account, resume existing queue
-        if state.get("status") == "paused" and (state.get("account") == account or not account):
+        # If already paused or running for this account with existing queue, resume safely
+        has_existing_queue = bool(state.get("reels_queue"))
+        if has_existing_queue and (state.get("status") in ["paused", "running"]) and (state.get("account") == account or not account):
             state["status"] = "running"
             if mode:
                 state["mode"] = mode

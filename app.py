@@ -2761,6 +2761,14 @@ def render_instagram_clipper():
     def render_live_crawler_dashboard():
         c_state = load_crawler_state()
         crawler_status = c_state.get("status", "idle")
+        crawler_active = is_crawler_active()
+
+        # Self-healing: if status says running but background thread died, mark as paused
+        if crawler_status == "running" and not crawler_active:
+            crawler_status = "paused"
+            c_state["status"] = "paused"
+            save_crawler_state(c_state)
+
         total_q = c_state.get("total_count", 0)
         completed_q = len(c_state.get("completed_ids", []))
         failed_q = len(c_state.get("failed_ids", []))
@@ -2770,7 +2778,7 @@ def render_instagram_clipper():
         with kpi1:
             status_badges = {
                 "running": "🟢 RUNNING (1-by-1)",
-                "paused": "⏸️ PAUSED",
+                "paused": "⏸️ PAUSED (Click Resume)",
                 "completed": "🏁 COMPLETED",
                 "idle": "⚪ IDLE"
             }
@@ -2803,6 +2811,8 @@ def render_instagram_clipper():
 
     c_state = load_crawler_state()
     crawler_status = c_state.get("status", "idle")
+    if crawler_status == "running" and not is_crawler_active():
+        crawler_status = "paused"
 
     # Workflow Mode Selector
     proc_mode = st.radio(
