@@ -75,13 +75,44 @@ def save_learning_db(data: Dict[str, Any]):
 
 
 def load_upload_history() -> List[Dict[str, Any]]:
+    history = []
     if UPLOAD_HISTORY_FILE.exists():
         try:
             with open(UPLOAD_HISTORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                history = json.load(f)
         except Exception:
             pass
-    return []
+
+    # Ensure all videos from upload_log.csv are represented
+    csv_file = Path("upload_log.csv")
+    if csv_file.exists():
+        try:
+            existing_ids = {h.get("video_id") for h in history if h.get("video_id")}
+            import csv
+            with open(csv_file, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    vid = (row.get("Video_ID") or "").strip()
+                    if vid and vid not in existing_ids:
+                        existing_ids.add(vid)
+                        history.append({
+                            "video_id": vid,
+                            "title": row.get("Title", "YouTube Clip"),
+                            "file_stem": Path(row.get("Original_File", "")).stem,
+                            "upload_timestamp": time.time(),
+                            "publish_at": row.get("Scheduled_Time") if row.get("Scheduled_Time") != "None" else None,
+                            "privacy_mode": row.get("Privacy", "public"),
+                            "tags": [],
+                            "duration_sec": 30.0,
+                            "caption_style": "neon",
+                            "channel_handle": "@zelmuesports",
+                            "last_synced_views": 0,
+                            "last_synced_likes": 0,
+                            "last_synced_comments": 0
+                        })
+        except Exception:
+            pass
+    return history
 
 
 def record_uploaded_video(
@@ -144,7 +175,7 @@ def sync_youtube_performance(force: bool = False) -> Dict[str, Any]:
         # Throttle to once per 5 minutes unless forced
         return {"status": "throttled", "synced_count": 0, "db": db}
 
-    video_ids = [h["video_id"] for h in history if h.get("video_id")][:50]
+    video_ids = [h["video_id"] for h in history if h.get("video_id")]
     if not video_ids:
         db["last_sync_timestamp"] = now
         save_learning_db(db)
@@ -156,49 +187,56 @@ def sync_youtube_performance(force: bool = False) -> Dict[str, Any]:
         if not yt:
             return {"status": "unauthenticated", "synced_count": 0, "db": db}
 
-        resp = yt.videos().list(
-            part="snippet,statistics,contentDetails,status",
-            id=",".join(video_ids)
-        ).execute()
-
         synced_count = 0
         durations = []
         hist_metrics = db.setdefault("history_metrics", {})
 
-        for item in resp.get("items", []):
-            vid = item.get("id")
-            stats = item.get("statistics", {})
-            snippet = item.get("snippet", {})
-            views = int(stats.get("viewCount", 0))
-            likes = int(stats.get("likeCount", 0))
-            comments = int(stats.get("commentCount", 0))
+        # Batch query in chunks of 50 (YouTube Data API v3 limit per call)
+        for i in range(0, len(video_ids), 50):
+            chunk = video_ids[i:i + 50]
+            try:
+                resp = yt.videos().list(
+                    part="snippet,statistics,contentDetails,status",
+                    id=",".join(chunk)
+                ).execute()
 
-            # VVSA (Viewed vs Swiped Away) estimation
-            # Shorts benchmark: Top viral shorts have >70% viewed, average has 50%.
-            engagement_rate = (likes * 1.5 + comments * 3) / max(1, views)
-            vvsa_est = round(min(94.0, max(42.0, 52.0 + (engagement_rate * 350))), 1)
+                for item in resp.get("items", []):
+                    vid = item.get("id")
+                    stats = item.get("statistics", {})
+                    snippet = item.get("snippet", {})
+                    views = int(stats.get("viewCount", 0))
+                    likes = int(stats.get("likeCount", 0))
+                    comments = int(stats.get("commentCount", 0))
 
-            hist_metrics[vid] = {
-                "title": snippet.get("title", ""),
-                "published_at": snippet.get("publishedAt", ""),
-                "views": views,
-                "likes": likes,
-                "comments": comments,
-                "vvsa_est": vvsa_est,
-                "synced_at": now
-            }
-            synced_count += 1
+                    # VVSA (Viewed vs Swiped Away) estimation
+                    # Shorts benchmark: Top viral shorts have >70% viewed, average has 50%.
+                    engagement_rate = (likes * 1.5 + comments * 3) / max(1, views)
+                    vvsa_est = round(min(94.0, max(42.0, 52.0 + (engagement_rate * 350))), 1)
 
-            # Update in-memory upload history
-            for h in history:
-                if h.get("video_id") == vid:
-                    h["last_synced_views"] = views
-                    h["last_synced_likes"] = likes
-                    h["last_synced_comments"] = comments
-                    h["vvsa_est"] = vvsa_est
-                    dur = h.get("duration_sec", 30.0)
-                    if views > 10:  # Only weight items with viewership
-                        durations.append((dur, views))
+                    hist_metrics[vid] = {
+                        "title": snippet.get("title", ""),
+                        "published_at": snippet.get("publishedAt", ""),
+                        "views": views,
+                        "likes": likes,
+                        "comments": comments,
+                        "vvsa_est": vvsa_est,
+                        "synced_at": now
+                    }
+                    synced_count += 1
+
+                    # Update in-memory upload history
+                    for h in history:
+                        if h.get("video_id") == vid:
+                            h["last_synced_views"] = views
+                            h["last_synced_likes"] = likes
+                            h["last_synced_comments"] = comments
+                            h["vvsa_est"] = vvsa_est
+                            dur = h.get("duration_sec", 30.0)
+                            if views > 10:  # Only weight items with viewership
+                                durations.append((dur, views))
+            except Exception as batch_err:
+                print(f"Error syncing batch {i}-{i+50}: {batch_err}")
+                continue
 
         # Re-save upload history with updated metrics
         try:
