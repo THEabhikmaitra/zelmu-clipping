@@ -161,7 +161,8 @@ from portal_stages import (
     render_quality_seo_stage,
     render_analytics_stage,
     render_learning_stage,
-    save_sidecar_data
+    save_sidecar_data,
+    render_module_purge_matrix
 )
 
 # Ensure base directories exist
@@ -369,6 +370,8 @@ st.markdown("""
         border-radius: 8px !important;
         box-shadow: 0 10px 25px rgba(0,0,0,0.5) !important;
         padding: 1rem !important;
+        min-width: 440px !important;
+        max-width: 520px !important;
     }
 
     /* YouTube Top Laser Loader */
@@ -761,24 +764,29 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Watermark Logo Popover (Triggered by ⚙️ Icon in Top Fixed Nav)
+# Watermark & Maintenance Popover (Triggered by ⚙️ Icon in Top Fixed Nav)
 active_logo_path = Path("logo.png") if Path("logo.png").exists() else None
 
-with st.popover("⚙️", help="Watermark Settings"):
-    st.caption("WATERMARK OVERLAY")
-    logo_file = st.file_uploader("Upload PNG/JPG", type=["png", "jpg", "jpeg"])
-    if logo_file is not None:
-        active_logo_path = Path("logo.png")
-        with open(active_logo_path, "wb") as f:
-            f.write(logo_file.read())
-        st.success("Logo saved!")
-        st.rerun()
-    
-    if Path("logo.png").exists():
-        st.image("logo.png", caption="Active Watermark", width=90)
-        if st.button("Remove Watermark", type="secondary", use_container_width=True):
-            Path("logo.png").unlink(missing_ok=True)
+with st.popover("⚙️", help="Settings & Module Maintenance"):
+    pop_tab1, pop_tab2 = st.tabs(["🎨 Watermark", "🗑️ Purge Modules & Videos"])
+    with pop_tab1:
+        st.caption("WATERMARK OVERLAY")
+        logo_file = st.file_uploader("Upload PNG/JPG", type=["png", "jpg", "jpeg"], key="wm_uploader_gear")
+        if logo_file is not None:
+            active_logo_path = Path("logo.png")
+            with open(active_logo_path, "wb") as f:
+                f.write(logo_file.read())
+            st.success("Logo saved!")
             st.rerun()
+
+        if Path("logo.png").exists():
+            st.image("logo.png", caption="Active Watermark", width=90)
+            if st.button("Remove Watermark", type="secondary", use_container_width=True, key="wm_btn_remove_gear"):
+                Path("logo.png").unlink(missing_ok=True)
+                st.rerun()
+
+    with pop_tab2:
+        render_module_purge_matrix(key_prefix="top_gear_purge")
 
 def render_labor_card(
     placeholder,

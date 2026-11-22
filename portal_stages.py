@@ -228,6 +228,164 @@ def _render_telemetry_metrics_grid(snap: Dict[str, Any]):
         )
 
 
+def purge_system_targets(selected_targets: List[str], ready_dir: Path = Path("ready_to_upload")) -> Dict[str, int]:
+    """
+    Executes selective or global purge across video files, scratch folders, and module databases.
+    """
+    counts = {
+        "videos_deleted": 0,
+        "files_deleted": 0,
+        "dbs_reset": 0
+    }
+
+    # 1. Video files in ready_to_upload
+    if "videos_pending" in selected_targets or "videos_approved" in selected_targets:
+        del_pending = "videos_pending" in selected_targets
+        del_approved = "videos_approved" in selected_targets
+        if ready_dir.exists():
+            for v_file in list(ready_dir.glob("*.mp4")):
+                sc = v_file.with_suffix(".json")
+                is_appr = False
+                if sc.exists():
+                    try:
+                        with open(sc, "r", encoding="utf-8") as f:
+                            d = json.load(f)
+                            is_appr = (d.get("approved") is True) or (d.get("status") == "approved")
+                    except Exception:
+                        pass
+
+                if (is_appr and del_approved) or (not is_appr and del_pending):
+                    try:
+                        v_file.unlink(missing_ok=True)
+                        if sc.exists():
+                            sc.unlink(missing_ok=True)
+                        counts["videos_deleted"] += 1
+                        counts["files_deleted"] += 1
+                    except Exception as e:
+                        print(f"Error unlinking {v_file}: {e}")
+
+    # 2. Workspace Scratch Files
+    if "workspace_temp" in selected_targets:
+        ws = Path("workspace")
+        if ws.exists():
+            for item in list(ws.iterdir()):
+                try:
+                    if item.is_file():
+                        item.unlink(missing_ok=True)
+                        counts["files_deleted"] += 1
+                    elif item.is_dir():
+                        shutil.rmtree(item, ignore_errors=True)
+                        counts["files_deleted"] += 1
+                except Exception:
+                    pass
+
+    # 3. Instagram Crawler State & Cache
+    if "insta_crawler" in selected_targets:
+        for f in [Path("insta_crawler_state.json"), Path("insta_discovered_cache.json"), Path("insta_crawler_events.log")]:
+            if f.exists():
+                f.unlink(missing_ok=True)
+                counts["dbs_reset"] += 1
+        try:
+            from instagram_scraper import reset_crawler
+            reset_crawler()
+        except Exception:
+            pass
+
+    # 4. Learning & Upload History
+    if "learning_history" in selected_targets:
+        for f in [Path("learning_db.json"), Path("upload_history.json")]:
+            if f.exists():
+                f.unlink(missing_ok=True)
+                counts["dbs_reset"] += 1
+
+    # 5. Campaigns DB
+    if "campaigns" in selected_targets:
+        for f in [Path("campaigns_db.json"), Path("contentrewards_cache.json")]:
+            if f.exists():
+                f.unlink(missing_ok=True)
+                counts["dbs_reset"] += 1
+
+    # 6. Trends & Daemons
+    if "trends_daemon" in selected_targets:
+        for f in [Path("trend_daemon_config.json"), Path("trend_daemon.log"), Path("trends_cache.json")]:
+            if f.exists():
+                f.unlink(missing_ok=True)
+                counts["dbs_reset"] += 1
+
+    # 7. Livestream Buffer & Watcher
+    if "livestream_watcher" in selected_targets:
+        for f in [Path("livestream_buffer.json"), Path("watcher_config.json"), Path("watcher.log"), Path("livestream.log"), Path("arbiter_lock.json"), Path("unified_events.log")]:
+            if f.exists():
+                f.unlink(missing_ok=True)
+                counts["dbs_reset"] += 1
+
+    # 8. YouTube Tokens (Protected)
+    if "youtube_tokens" in selected_targets:
+        for f in list(Path(".").glob("token_*.json")) + [Path("token.json")]:
+            if f.exists():
+                f.unlink(missing_ok=True)
+                counts["files_deleted"] += 1
+
+    return counts
+
+
+def render_module_purge_matrix(key_prefix: str = "purge"):
+    """
+    Renders the Checkbox Selection Matrix for clearing individual or all modules,
+    with explicit options to delete pending/approved video files, temp scratch,
+    and reset pipeline databases with two-step safety confirmation.
+    """
+    st.markdown("<div style='font-size:0.9rem; font-weight:700; color:#f87171; margin-bottom:4px;'>🗑️ Clear Modules & Delete Videos</div>", unsafe_allow_html=True)
+    st.caption("Select individual targets to purge, or check Select All for a complete clean slate.")
+
+    # Select All toggle
+    t_all = st.checkbox("⚡ Select All Modules & Videos (Complete Wipe)", value=False, key=f"{key_prefix}_sel_all")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("<span style='font-size:0.75rem; font-weight:700; color:#38bdf8;'>🎬 VIDEO & SCRATCH FILES</span>", unsafe_allow_html=True)
+        del_pending = st.checkbox("Pending Clips (`ready_to_upload/*.mp4`)", value=t_all, key=f"{key_prefix}_pending")
+        del_approved = st.checkbox("Approved Ready Clips (`ready_to_upload/*.mp4`)", value=t_all, key=f"{key_prefix}_approved")
+        del_workspace = st.checkbox("Temp Scratch Files (`workspace/*`)", value=t_all, key=f"{key_prefix}_workspace")
+
+    with col2:
+        st.markdown("<span style='font-size:0.75rem; font-weight:700; color:#a855f7;'>📊 MODULE DATABASES & DAEMONS</span>", unsafe_allow_html=True)
+        del_insta = st.checkbox("Instagram Queue & Cache (`insta_crawler_*.json`)", value=t_all, key=f"{key_prefix}_insta")
+        del_learning = st.checkbox("Learning DB & Upload History", value=t_all, key=f"{key_prefix}_learning")
+        del_campaigns = st.checkbox("Campaigns & Rewards DB", value=t_all, key=f"{key_prefix}_campaigns")
+        del_trends = st.checkbox("Trends & Radar Cache / Logs", value=t_all, key=f"{key_prefix}_trends")
+        del_watcher = st.checkbox("Livestream Buffer & Watcher State", value=t_all, key=f"{key_prefix}_watcher")
+        del_tokens = st.checkbox("⚠️ YouTube Channel Tokens (`token_*.json`)", value=False, key=f"{key_prefix}_tokens", help="Forces re-authentication with YouTube")
+
+    st.markdown("<div style='margin: 8px 0;'></div>", unsafe_allow_html=True)
+    confirm = st.checkbox(
+        "⚠️ I understand this permanently deletes selected files and module records.",
+        value=False,
+        key=f"{key_prefix}_confirm_gate"
+    )
+
+    btn_label = "🚨 Execute Purge / Reset Selected"
+    if st.button(btn_label, type="primary", disabled=not confirm, key=f"{key_prefix}_run_btn", use_container_width=True):
+        targets = []
+        if del_pending: targets.append("videos_pending")
+        if del_approved: targets.append("videos_approved")
+        if del_workspace: targets.append("workspace_temp")
+        if del_insta: targets.append("insta_crawler")
+        if del_learning: targets.append("learning_history")
+        if del_campaigns: targets.append("campaigns")
+        if del_trends: targets.append("trends_daemon")
+        if del_watcher: targets.append("livestream_watcher")
+        if del_tokens: targets.append("youtube_tokens")
+
+        if not targets:
+            st.warning("No targets selected.")
+        else:
+            res = purge_system_targets(targets)
+            st.success(f"✓ Purge complete: {res['videos_deleted']} videos deleted, {res['files_deleted']} files cleared, {res['dbs_reset']} databases reset.")
+            time.sleep(1.2)
+            st.rerun()
+
+
 if hasattr(st, "dialog"):
     @st.dialog("📊 Production Telemetry & System Parameters", width="large")
     def show_system_telemetry_dialog():
@@ -255,6 +413,10 @@ if hasattr(st, "dialog"):
         with b3:
             if st.button("🔄 Refresh Telemetry", use_container_width=True, key="dlg_refresh"):
                 st.rerun()
+
+        st.write("")
+        with st.expander("🗑️ Clear Any or All Modules / Delete Videos", expanded=False):
+            render_module_purge_matrix(key_prefix="dlg_modal_purge")
 else:
     def show_system_telemetry_dialog():
         pass
