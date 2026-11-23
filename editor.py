@@ -576,8 +576,8 @@ def render_mode_a_short(
 
     # Single-pass scale and anti-content-id evasion: scales directly to target dimensions
     scale_expr = "scale=1084:1928,crop=1080:1920:2:4" if enable_anti_content_id else "scale=1080:1920"
-    # Mechanical Pacing: 0:00-0:02 snap zoom (1.18x), followed by rapid 1.5s cut/punch-in cycles (1.08x vs 1.0x)
-    zoom_filter = ",zoompan=z='if(between(on,0,45),1.18,if(mod(floor(on/45),2),1.08,1.0))':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30" if enable_pacing_zoom else ""
+    # Mechanical Pacing @ 60 FPS: 0:00-0:01.5 snap zoom (1.18x on frames 0-90), followed by 1.5s cut/punch-in cycles (1.08x vs 1.0x every 90 frames)
+    zoom_filter = ",zoompan=z='if(between(on,0,90),1.18,if(mod(floor(on/90),2),1.08,1.0))':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=60" if enable_pacing_zoom else ""
 
     tracking_keys = None
     if enable_tracking and not split_layout:
@@ -693,6 +693,7 @@ def render_mode_a_short(
         "-map", v_out_label,
         "-map", cur_audio,
         *get_best_video_encoder(),
+        "-r", "60",
         "-c:a", "aac",
         "-b:a", "128k",
         "-movflags", "+faststart",
@@ -853,7 +854,7 @@ def generate_viral_thumbnail(
     ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
     cmd = [
         ffmpeg_bin, "-y",
-        "-ss", "0.6",
+        "-ss", "1.2",
         "-i", str(video_path),
         "-vframes", "1",
         "-q:v", "2",

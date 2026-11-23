@@ -889,13 +889,16 @@ def upload_single_video(
             "description": full_description,
             "tags": full_tags,
             "categoryId": str(category_id),
-            "defaultLanguage": "en-US",
-            "defaultAudioLanguage": "en-US"
+            "defaultLanguage": "en",
+            "defaultAudioLanguage": "en"
         },
         "status": {
             "privacyStatus": effective_privacy,
             "selfDeclaredMadeForKids": False,
-            "embeddable": True
+            "madeForKids": False,
+            "license": "youtube",
+            "embeddable": True,
+            "publicStatsViewable": True
         }
     }
 

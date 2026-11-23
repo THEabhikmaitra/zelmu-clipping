@@ -410,10 +410,10 @@ def produce_trend_package(
                 split_layout=False,
                 enable_tracking=False,
                 hook_title=hook_txt,
-                enable_pacing_zoom=True,       # 3.2s dynamic punch-in attention resets
+                enable_pacing_zoom=True,       # 1.5s dynamic punch-in attention resets @ 60 FPS
                 enable_anti_content_id=False,  # NO pitch shift / audio speed altering
                 enable_music_ducking=False,    # NO phonk beat
-                enable_sfx=False               # NO punch / whoosh sound
+                enable_sfx=True                # Hard impact / whoosh SFX hits on frame 1
             )
             cut_vis.unlink(missing_ok=True)
 
@@ -443,8 +443,6 @@ def produce_trend_package(
                         seen_tags.add(clean_t.lower())
                         seo_tags.append(clean_t)
 
-                yt_queries_block = "\n".join(f"- {kw}" for kw in yt_autocomplete[:6]) if yt_autocomplete else f"- {query}"
-
                 with open(sidecar_p, "w", encoding="utf-8") as sf:
                     json.dump({
                         "title": reel_title_clean[:100],
@@ -452,12 +450,11 @@ def produce_trend_package(
                         "pacing_zoom": True,
                         "hook_title": hook_txt,
                         "description": (
-                            f"🔥 {reel_title}\n\n"
-                            f"{script_txt}\n\n"
-                            f"🔍 Trending YouTube Search Queries:\n"
-                            f"{yt_queries_block}\n\n"
-                            f"Stay tuned to @zelmuesports for daily tech, gaming, and real-time trending breakdowns!\n\n"
-                            f"#Shorts #Trending #{safe_q} #GamingTech"
+                            f"{reel_title.replace('#Shorts', '').strip()}: {script_txt[:120]}...\n\n"
+                            f"Transformative commentary & analysis covering latest developments on {query}.\n"
+                            f"Topics & Keywords: {', '.join(yt_autocomplete[:5]) if yt_autocomplete else query}.\n"
+                            f"Subscribe to @zelmuesports for daily gaming benchmarks and hardware breakdowns!\n\n"
+                            f"#Shorts #{safe_q} #GamingTech"
                         ),
                         "tags": seo_tags[:25],
                         "category_id": str(yt_category_id),
