@@ -54,6 +54,8 @@ from editor import (
 )
 from trends_hunter import (
     fetch_google_trends_us,
+    fetch_youtube_search_breakouts,
+    scan_youtube_live_breakout_trends,
     search_trend_source_videos,
     get_trend_news_articles,
     get_trend_video_coverage,
@@ -2496,11 +2498,18 @@ def render_live_buffer():
 
 def render_trend_hunter():
     st.markdown("<div class='section-title'>TREND HUNTER</div>", unsafe_allow_html=True)
-    st.caption("Google Trends (US 4h) → 6 Shorts + 2 Landscape (Public).")
+    st.caption("Pre-Peak US Trends & Real-Time YouTube Search Autocomplete Radar → 8 Pure 9:16 Shorts.")
 
     # Trend Scanner Parameters
     st.markdown("<div class='section-title'>SCANNER</div>", unsafe_allow_html=True)
-    p1, p2, p3, p4, p5 = st.columns([1, 1, 1.1, 1.4, 1.3])
+    p0, p1, p2, p3, p4, p5 = st.columns([1.3, 0.8, 0.9, 1.1, 1.3, 1.0])
+    with p0:
+        radar_feed = st.selectbox(
+            "Radar Source",
+            ["Google Pre-Peak 4h", "YouTube Autocomplete Live", "Combined Dual Radar"],
+            index=0,
+            key="trend_feed_src"
+        )
     with p1:
         trend_geo = st.selectbox("Geo", ["US", "GB", "CA", "AU"], index=0, key="trend_geo")
     with p2:
@@ -2518,8 +2527,15 @@ def render_trend_hunter():
         btn_scan_trends = st.button("🔥 Scan", use_container_width=True, type="primary")
 
     if btn_scan_trends or "cached_us_trends" not in st.session_state:
-        with st.spinner(f"Scraping trends ({CATEGORIES[sel_cat_key]['label']}, {trend_geo}, {trend_hours}h)..."):
-            scanned_trends = fetch_google_trends_us(geo=trend_geo, hours=trend_hours, sort=trend_sort, category_id=sel_cat_id)
+        with st.spinner(f"Scraping trends ({radar_feed}, {trend_geo})..."):
+            if radar_feed == "YouTube Autocomplete Live":
+                scanned_trends = scan_youtube_live_breakout_trends(geo=trend_geo)
+            elif radar_feed == "Combined Dual Radar":
+                g_trends = fetch_google_trends_us(geo=trend_geo, hours=trend_hours, sort=trend_sort, category_id=sel_cat_id)
+                yt_trends = scan_youtube_live_breakout_trends(geo=trend_geo)
+                scanned_trends = yt_trends + g_trends
+            else:
+                scanned_trends = fetch_google_trends_us(geo=trend_geo, hours=trend_hours, sort=trend_sort, category_id=sel_cat_id)
             st.session_state["cached_us_trends"] = scanned_trends
             st.session_state["last_trends_scan_ts"] = datetime.datetime.now().strftime("%m/%d/%y, %I:%M %p")
 
@@ -2601,6 +2617,16 @@ def render_trend_hunter():
                                     st.markdown(f"- [{ni['title']}]({ni['url']}) *({ni['source']})*")
                             else:
                                 st.caption("No news articles.")
+
+                        if st.button("🔴 Live YouTube Search Queries", key=f"btn_yt_suggest_{idx}"):
+                            yt_breakouts = fetch_youtube_search_breakouts(tr['query'], max_items=6)
+                            tr["yt_breakouts"] = yt_breakouts
+                            if yt_breakouts:
+                                st.write("**Realtime YouTube Autocomplete Breakouts:**")
+                                for yb in yt_breakouts:
+                                    st.markdown(f"- 🔍 `{yb}`")
+                            else:
+                                st.caption("No direct YouTube suggest variants.")
                     with c2:
                         st.markdown("##### Actions")
                         action_btn_label = "🔄 Re-Produce & Publish" if cov_status == "uploaded" else ("⚡ Produce More Clips" if cov_status == "ready" else "🚀 Produce & Publish")
