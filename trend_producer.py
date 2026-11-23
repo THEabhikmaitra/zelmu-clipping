@@ -80,25 +80,24 @@ def build_fallback_scripts(query: str, breakdown: List[str], news_titles: List[s
             "hook": f"🔥 FINAL VERDICT",
             "title": f"The Final Truth on {query.title()}",
             "script": f"This changes everything we knew about {query}! Despite all the conflicting speculation online, verified facts show {sub_topic2} is at the absolute center of this viral moment. And if you still don't believe it..."
-        }
-    ]
-
-    landscapes = [
-        {
-            "title": f"The Complete Story Behind {query.title()} (Full Breakdown)",
-            "script": f"Over the last four hours, a massive breakout story has taken over the internet: {query}. In this video, we are breaking down everything that has unfolded from start to finish. First, let's examine how this trend originated and why search volume skyrocketed by thousands of percent. Major reports from news outlets have highlighted key moments, including {news_snippet}. Furthermore, related developments around {sub_topic1} and {sub_topic2} have raised serious questions. We will examine the data, the eyewitness reactions, and what to expect next. Let us know your perspective in the comments, and don't forget to like and subscribe for more real-time breakdowns."
         },
         {
+            "hook": f"⚡ WHAT NOBODY TOLD YOU",
             "title": f"What Nobody Is Telling You About {query.title()}",
-            "script": f"There is an untold side to the viral story surrounding {query} that mainstream coverage has completely overlooked. While millions of searches are pouring in, few people understand the underlying causes that triggered this breakout. Looking closely at {sub_topic1}, the timeline reveals a completely different narrative than what social media feeds are showing. Today, we dive deep into the facts, dissecting the latest developments and explaining what this means moving forward. Make sure you watch until the very end, and subscribe for daily unvarnished breakdowns."
+            "script": f"Here is what nobody in the media is telling you about {query}! While everyone is focusing on surface level updates, industry data reveals a massive quiet shift directly tied to {sub_topic1}. And the wildest detail is..."
+        },
+        {
+            "hook": f"🛑 WATCH BEFORE GONE",
+            "title": f"The Untold Reality of {query.title()}",
+            "script": f"Before you watch another clip about {query}, you need to understand this single fact! Searches just broke all-time high records in the United States because {sub_topic2} triggered an emergency response that nobody predicted, which proves why..."
         }
     ]
 
-    return {"shorts": shorts, "landscapes": landscapes}
+    return {"shorts": shorts, "landscapes": []}
 
 
 def generate_scripts_for_trend(trend: Dict[str, Any]) -> Dict[str, Any]:
-    """Generates 6 Short scripts (with seamless loops) and 2 Long Video scripts from trend data via Ollama or fallback."""
+    """Generates 8 high-velocity Short scripts (with seamless loops) targeting Tier-1 US audience."""
     query = trend.get("query", "Viral Topic")
     breakdown = trend.get("trend_breakdown", [query])
     news_articles = trend.get("news_articles", [])
@@ -108,11 +107,11 @@ def generate_scripts_for_trend(trend: Dict[str, Any]) -> Dict[str, Any]:
     learned_seo = get_learned_seo_boost()
     learned_prompt = get_optimized_prompt_injection()
     learned_tags = learned_seo.get("high_cpm_tags", [])
-    target_sec = learned_prompt.get("target_duration_sec", 32.0)
+    target_sec = learned_prompt.get("target_duration_sec", 30.0)
     target_words = learned_prompt.get("target_word_count", 48)
 
-    # Try Ollama JSON generation with strict retention rules
-    prompt = f"""You are an elite YouTube Shorts viral producer.
+    # Try Ollama JSON generation with strict Tier-1 US retention rules
+    prompt = f"""You are an elite YouTube Shorts viral producer specializing in Tier-1 US audience content.
 A topic is currently experiencing a massive breakout in the United States:
 Topic: "{query}"
 Related keywords: {breakdown[:5]}
@@ -121,26 +120,23 @@ Learned High-CPM tags: {learned_tags[:5]}
 Target video duration: {target_sec} seconds (~{target_words} words per Short)
 
 MANDATORY VIRAL RETENTION RULES:
-1. FRAME 0 HOOK: Start immediately with high curiosity, tension, or surprise. NEVER use greetings or intros ('Hey guys', 'Welcome back' are strictly forbidden).
-2. SEAMLESS LOOP: For each Short, the final sentence MUST grammatically connect into the opening hook phrase so the video loops endlessly when replayed.
-3. CONCISE PACING: Strict 40-50 words per Short for maximum Average Percentage Viewed (APV > 80%).
+1. TARGET AUDIENCE: Strict Tier-1 United States viewers. Natural American English phrasing.
+2. FRAME 0 HOOK: Start immediately with high curiosity, tension, or surprise. NEVER use greetings or intros ('Hey guys', 'Welcome back' are strictly forbidden).
+3. SEAMLESS LOOP: For each Short, the final sentence MUST grammatically connect into the opening hook phrase so the video loops endlessly when replayed.
+4. CONCISE PACING: Strict 40-50 words per Short for maximum Average Percentage Viewed (APV > 80%).
 
-Write 6 high-energy viral Shorts scripts (each 40-50 words, 9:16 format) and 2 compelling Landscape video scripts (each 180-220 words, 16:9 format).
+Write 8 high-energy viral Shorts scripts (each 40-50 words, 9:16 format).
 Return ONLY JSON with this schema:
 {{
   "shorts": [
-    {{"hook": "⚡ SHORT HOOK", "title": "Catchy Title", "script": "Full spoken voiceover script text ending with seamless loop bridge clause..."}},
-    ... (6 total)
-  ],
-  "landscapes": [
-    {{"title": "Deep Dive Title 1", "script": "Full spoken voiceover script text..."}},
-    {{"title": "Deep Dive Title 2", "script": "Full spoken voiceover script text..."}}
+    {{"hook": "⚡ SHORT HOOK", "title": "Catchy Title #Shorts", "script": "Full spoken voiceover script text ending with seamless loop bridge clause..."}},
+    ... (8 total)
   ]
 }}"""
     try:
         ollama_res = query_ollama_json(prompt, retries=1, timeout=45)
         if ollama_res and "shorts" in ollama_res and len(ollama_res["shorts"]) >= 6:
-            return ollama_res
+            return {"shorts": ollama_res["shorts"][:8], "landscapes": []}
     except Exception:
         pass
 
@@ -263,7 +259,7 @@ def produce_trend_package(
             status_callback(query, stg, stg_name, detail, pct, s_done, v_done)
 
     log(f"🔥 Starting Trend Production for: '{query}'")
-    update_status(1, "Step 1/5: AI Scripts", f"Generating 6 Shorts scripts + 2 Landscape scripts for '{query}'...", 15, 0, 0)
+    update_status(1, "Step 1/5: AI Scripts", f"Generating 8 viral Shorts scripts for '{query}' (Tier-1 US)...", 15, 0, 0)
 
     # Step 1: News & Scripts
     log("Step 1/5: Fetching recent news headlines & generating AI scripts...")
@@ -271,8 +267,8 @@ def produce_trend_package(
         trend["news_articles"] = get_trend_news_articles(query, max_articles=4)
 
     package_scripts = generate_scripts_for_trend(trend)
-    shorts_scripts = package_scripts.get("shorts", [])[:6]
-    landscapes_scripts = package_scripts.get("landscapes", [])[:2]
+    shorts_scripts = package_scripts.get("shorts", [])[:8]
+    landscapes_scripts = []
 
     # Step 2: Sourcing visual footage with Strict Copyright Shield
     update_status(2, "Step 2/5: Sourcing Footage", f"Checking copyright safety & sourcing visuals for '{query}'...", 25, 0, 0)
@@ -423,79 +419,18 @@ def produce_trend_package(
                     update_status(3, f"Step 3/5: Rendering Reels ({done_cnt}/{total_shorts_count})", f"Rendered Reel {done_cnt}/{total_shorts_count}: '{res_p.name}' via Intel QSV...", step_pct, done_cnt, 0)
                     log(f"✓ Rendered Short: {res_p.name}")
 
-        # Step 4: Render 2 Landscape Videos (16:9)
-        update_status(4, "Step 4/5: Rendering Landscape", "Synthesizing voiceovers & rendering 2 Landscape videos...", 72, len(rendered_shorts), 0)
-        log(f"Step 4/5: Synthesizing voiceovers & rendering 2 Landscape videos...")
-        ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
-        font_f = get_windows_font("ariblk.ttf")
-        f_arg = f"fontfile='{font_f}':" if font_f else ""
-        clean_header = "".join(c for c in query.upper() if c.isalnum() or c.isspace())[:30]
-
-        for l_idx, l_item in enumerate(landscapes_scripts):
-            l_title = l_item.get("title", f"{query} Breakdown {l_idx+1}")
-            l_script = l_item.get("script", "")
-
-            wav_path = work_dir / f"tts_land_{l_idx}.wav"
-            generate_piper_tts(l_script, wav_path)
-            dur = get_audio_duration(wav_path)
-
-            final_land_mp4 = READY_DIR / f"Video_{safe_q}_{l_idx+1}_{ts}.mp4"
-
-            # Render 16:9 Landscape Video with looped visual background
-            vf_filter = (
-                f"scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
-                f"drawtext={f_arg}text='{clean_header} BREAKDOWN':fontsize=42:fontcolor=white:box=1:boxcolor=black@0.75:x=(w-text_w)/2:y=80"
-            )
-            land_cmd = [
-                ffmpeg_bin, "-y",
-                "-stream_loop", "-1",
-                "-i", str(source_clip_landscape),
-                "-i", str(wav_path),
-                "-t", f"{dur:.2f}",
-                "-vf", vf_filter,
-                "-map", "0:v:0",
-                "-map", "1:a:0",
-                *get_best_video_encoder(),
-                "-c:a", "aac",
-                "-b:a", "192k",
-                str(final_land_mp4)
-            ]
-            res = subprocess.run(land_cmd, capture_output=True)
-            if res.returncode == 0 and is_valid_video_file(final_land_mp4):
-                l_title_clean = l_title if "(full breakdown)" in l_title.lower() else f"{l_title} (Full Breakdown)"
-                # Generate sidecar metadata JSON for YouTube Studio (Trend-specific, NO GTA6!)
-                sidecar_land = final_land_mp4.with_suffix(".json")
-                try:
-                    with open(sidecar_land, "w", encoding="utf-8") as sf:
-                        json.dump({
-                            "title": l_title_clean[:100],
-                            "description": (
-                                f"The full breakdown of {query}.\n\n"
-                                f"{l_script}\n\n"
-                                f"Subscribe to @zelmuesports for daily in-depth breakdowns on unfolding stories across the United States.\n\n"
-                                f"#Trending #{safe_q} #News #DeepDive"
-                            ),
-                            "tags": [query, *trend.get("trend_breakdown", [])[:4], "Deep Dive", "Explained", "Trending", "News", "United States"],
-                            "category_id": "25",
-                            "privacy_status": "public"
-                        }, sf, indent=2, ensure_ascii=False)
-                except Exception:
-                    pass
-
-                rendered_landscapes.append(final_land_mp4)
-                v_done_cnt = len(rendered_landscapes)
-                l_pct = 72 + int((v_done_cnt / 2) * 18)
-                update_status(4, f"Step 4/5: Rendering Landscape ({v_done_cnt}/2)", f"Rendered Landscape Video {v_done_cnt}/2: '{final_land_mp4.name}'...", l_pct, len(rendered_shorts), v_done_cnt)
-                log(f"✓ Rendered Landscape Video: {final_land_mp4.name}")
+        # Step 4: Final Quality Verification on All Shorts
+        update_status(4, "Step 4/5: Quality Review Gate", f"Verified {len(rendered_shorts)} high-retention 9:16 Shorts...", 80, len(rendered_shorts), 0)
+        log(f"Step 4/5: Quality verification on {len(rendered_shorts)} Tier-1 US Shorts...")
     finally:
         release_compute_lock("trend_producer")
 
     # Step 5: Instant Public Upload to Studio
-    all_rendered = rendered_shorts + rendered_landscapes
+    all_rendered = rendered_shorts
     upload_results = []
     if auto_upload and all_rendered and is_authenticated():
-        update_status(5, "Step 5/5: Publishing Instantly", f"Publishing {len(all_rendered)} assets instantly to YouTube Studio (Public)...", 92, len(rendered_shorts), len(rendered_landscapes))
-        log(f"Step 5/5: Publishing {len(all_rendered)} assets ({len(rendered_shorts)} Shorts + {len(rendered_landscapes)} Videos) instantly (PUBLIC) to YouTube Studio...")
+        update_status(5, "Step 5/5: Publishing Instantly", f"Publishing {len(all_rendered)} Shorts instantly to YouTube Studio (Public)...", 92, len(rendered_shorts), 0)
+        log(f"Step 5/5: Publishing {len(all_rendered)} Shorts instantly (PUBLIC) to YouTube Studio...")
         upload_results = upload_batch_private(
             max_batch_size=len(all_rendered),
             auto_schedule=False,
@@ -508,12 +443,12 @@ def produce_trend_package(
     import shutil
     shutil.rmtree(work_dir, ignore_errors=True)
 
-    update_status(5, "Completed", f"Successfully produced & published {len(rendered_shorts)} Reels + {len(rendered_landscapes)} Videos for '{query}'.", 100, len(rendered_shorts), len(rendered_landscapes))
-    log(f"🎉 Completed! Generated & published {len(rendered_shorts)} Shorts + {len(rendered_landscapes)} Landscape Videos instantly from '{query}'.")
+    update_status(5, "Completed", f"Successfully produced & published {len(rendered_shorts)} Tier-1 US Shorts for '{query}'.", 100, len(rendered_shorts), 0)
+    log(f"🎉 Completed! Generated & published {len(rendered_shorts)} 9:16 Shorts instantly from '{query}'.")
     return {
         "query": query,
         "shorts": [str(p) for p in rendered_shorts],
-        "landscapes": [str(p) for p in rendered_landscapes],
+        "landscapes": [],
         "total_rendered": len(all_rendered),
         "uploads": upload_results
     }

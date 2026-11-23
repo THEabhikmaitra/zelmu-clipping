@@ -803,12 +803,12 @@ def calculate_monetization_schedule_slots(count: int, slots_per_day: int = 6) ->
     now = datetime.datetime.now(datetime.timezone.utc)
 
     if slots_per_day == 3:
-        target_hours = [15, 18, 21]  # 3/day (10am, 1pm, 4pm EST)
+        target_hours = [17, 20, 23]  # 3/day: 12pm, 3pm, 6pm EST (Tier-1 US prime)
     elif slots_per_day == 12:
-        target_hours = [8, 10, 12, 14, 16, 17, 18, 19, 20, 21, 22, 23]  # 12/day hyper-frequency
+        target_hours = [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 1]  # 12/day active US day
     else:
-        # Default 6/day (every 2-3 hours during active US/UK windows)
-        target_hours = [10, 13, 15, 18, 20, 22]
+        # Default 6/day: 9am, 11am, 1pm, 3pm, 5pm, 8pm EST (Peak Tier-1 US browsing)
+        target_hours = [14, 16, 18, 20, 22, 1]
 
     current_day = now.date()
     if now.hour >= target_hours[-1]:

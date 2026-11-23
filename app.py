@@ -2659,8 +2659,8 @@ def render_trend_factory():
         st.info(f"🎯 **Target Trend from Stage 1:** `{target_q}`")
         t_c1, t_c2 = st.columns([1.5, 1])
         with t_c1:
-            if st.button(f"⚡ Produce 6 Shorts for '{target_q}' Now", type="primary", use_container_width=True, key="btn_run_target_trend"):
-                with st.spinner(f"Producing Shorts for '{target_q}'..."):
+            if st.button(f"⚡ Produce 8 Tier-1 US Shorts for '{target_q}' Now", type="primary", use_container_width=True, key="btn_run_target_trend"):
+                with st.spinner(f"Producing 8 Tier-1 Shorts for '{target_q}'..."):
                     cached = st.session_state.get("cached_us_trends", [])
                     match = next((t for t in cached if t["query"] == target_q), {"query": target_q, "trend_breakdown": [target_q]})
                     pkg_res = produce_trend_package(match, auto_upload=False)
