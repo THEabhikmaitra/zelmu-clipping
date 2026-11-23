@@ -557,16 +557,16 @@ def render_mode_a_short(
     # HARD RULE: Background songs/music permanently disabled to guarantee 0% Content ID copyright claims
     has_music = False
 
-    # Optional Frame-1 viral hook banner (first 1.2s to boost feed CTR)
+    # Optional Frame-1 viral hook banner (first 1.5s to boost feed CTR)
     hook_filter_str = ""
     if hook_title:
         clean_hook = re.sub(r"[^\w\s!?-]", "", hook_title)[:30].strip().upper()
         if clean_hook:
-            font_title = get_windows_font("ariblk.ttf")
+            font_title = get_windows_font("impact.ttf") or get_windows_font("ariblk.ttf")
             f_title_arg = f"fontfile='{font_title}':" if font_title else ""
             hook_filter_str = (
-                f",drawtext={f_title_arg}text='⚡ {clean_hook}':fontsize=52:fontcolor=yellow:"
-                f"x=(w-text_w)/2:y=240:box=1:boxcolor=black@0.80:boxborderw=12:enable='between(t,0,1.2)'"
+                f",drawtext={f_title_arg}text='⚡ {clean_hook}':fontsize=74:fontcolor=yellow:"
+                f"x=(w-text_w)/2:y=380:box=1:boxcolor=black@0.85:boxborderw=16:enable='between(t,0,1.5)'"
             )
 
     # Single-pass scale and anti-content-id evasion: scales directly to target dimensions
@@ -817,3 +817,140 @@ def render_mode_b_short(
         raise RuntimeError(f"Audio mix failed:\n{mix_res.stderr}")
 
     return output_short_path
+
+
+def generate_viral_thumbnail(
+    video_path: Path,
+    hook_text: str,
+    sub_text: str = "",
+    pill_tag: str = "🔴 DEBATE",
+    output_thumb_path: Optional[Path] = None
+) -> Path:
+    """
+    Extracts high-definition frame from video and composites an ultra-high engagement
+    9:16 vertical thumbnail optimized for YouTube Shorts and Reels grids:
+    - Frame 0/1 extracted via ffmpeg at t=0.6s.
+    - Upper Safe-Zone (Y=280 to Y=600):
+        * Top urgency badge/pill tag (e.g. 🔴 DEBATE, ⚠️ DON'T BUY, ⚡ EXPOSED).
+        * Giant bold hook text (80-92px Impact font, yellow/white with black stroke and rounded background box).
+    - Middle Visual Zone: High-contrast action frame with enhanced contrast.
+    - Lower Safe-Zone (Y=1280 to Y=1380):
+        * Direct comparison/benchmark sub-badge (e.g. "GTA 6 vs GTA 5 🤯" or "13 YEARS APART").
+    - Strict UI Safe-Zone compliance: Avoids top 180px and bottom 350px platform UI overlays.
+    - Saves as <stem>.thumb.jpg and <stem>.jpg.
+    """
+    video_path = Path(video_path).resolve()
+    if not output_thumb_path:
+        output_thumb_path = video_path.with_suffix(".thumb.jpg")
+    output_thumb_path = Path(output_thumb_path).resolve()
+
+    temp_frame = output_thumb_path.parent / f"temp_frame_{output_thumb_path.stem}.jpg"
+    ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
+    cmd = [
+        ffmpeg_bin, "-y",
+        "-ss", "0.6",
+        "-i", str(video_path),
+        "-vframes", "1",
+        "-q:v", "2",
+        str(temp_frame)
+    ]
+    try:
+        subprocess.run(cmd, capture_output=True, timeout=15)
+        from PIL import Image, ImageDraw, ImageFont, ImageEnhance
+
+        if temp_frame.exists() and temp_frame.stat().st_size > 1000:
+            base_img = Image.open(temp_frame).convert("RGB")
+        else:
+            base_img = Image.new("RGB", (1080, 1920), color=(15, 20, 30))
+
+        if base_img.size != (1080, 1920):
+            base_img = base_img.resize((1080, 1920), Image.Resampling.LANCZOS)
+
+        enhancer = ImageEnhance.Contrast(base_img)
+        base_img = enhancer.enhance(1.15)
+        draw = ImageDraw.Draw(base_img)
+
+        font_path = "C:/Windows/Fonts/impact.ttf" if Path("C:/Windows/Fonts/impact.ttf").exists() else "C:/Windows/Fonts/ariblk.ttf"
+        font_pill = ImageFont.truetype(font_path, 42)
+        font_hook = ImageFont.truetype(font_path, 86)
+        font_sub = ImageFont.truetype(font_path, 52)
+
+        # 1. Top Urgency Pill Tag (Y=280)
+        clean_pill = pill_tag.strip().upper()
+        if clean_pill:
+            bbox_p = draw.textbbox((540, 290), clean_pill, font=font_pill, anchor="mm")
+            draw.rounded_rectangle(
+                [bbox_p[0] - 28, bbox_p[1] - 12, bbox_p[2] + 28, bbox_p[3] + 14],
+                radius=14,
+                fill=(225, 20, 50),
+                outline=(255, 255, 255),
+                width=3
+            )
+            draw.text((540, 290), clean_pill, font=font_pill, fill=(255, 255, 255), anchor="mm")
+
+        # 2. Giant Hook Box in Upper Safe Zone (Y=440-520)
+        clean_hook = re.sub(r"[^\w\s!?:-]", "", hook_text).strip().upper()[:28]
+        if clean_hook:
+            words = clean_hook.split()
+            if len(clean_hook) > 16 and len(words) >= 2:
+                mid = len(words) // 2
+                line1 = " ".join(words[:mid])
+                line2 = " ".join(words[mid:])
+                lines = [line1, line2]
+            else:
+                lines = [clean_hook]
+
+            y_start = 450 if len(lines) == 1 else 400
+            for i, l_text in enumerate(lines):
+                cur_y = y_start + (i * 96)
+                bbox_h = draw.textbbox((540, cur_y), l_text, font=font_hook, anchor="mm")
+                draw.rounded_rectangle(
+                    [bbox_h[0] - 28, bbox_h[1] - 10, bbox_h[2] + 28, bbox_h[3] + 12],
+                    radius=18,
+                    fill=(0, 0, 0),
+                    outline=(255, 230, 0),
+                    width=5
+                )
+                draw.text(
+                    (540, cur_y),
+                    l_text,
+                    font=font_hook,
+                    fill=(255, 230, 0),
+                    anchor="mm",
+                    stroke_width=6,
+                    stroke_fill=(0, 0, 0)
+                )
+
+        # 3. Sub-Text Benchmark / Comparison Badge in Lower Safe Zone (Y=1320)
+        clean_sub = re.sub(r"[^\w\s!?:-]", "", sub_text).strip()[:38]
+        if clean_sub:
+            bbox_s = draw.textbbox((540, 1320), clean_sub, font=font_sub, anchor="mm")
+            draw.rounded_rectangle(
+                [bbox_s[0] - 25, bbox_s[1] - 10, bbox_s[2] + 25, bbox_s[3] + 12],
+                radius=14,
+                fill=(10, 15, 25),
+                outline=(255, 255, 255),
+                width=3
+            )
+            draw.text(
+                (540, 1320),
+                clean_sub,
+                font=font_sub,
+                fill=(255, 255, 255),
+                anchor="mm",
+                stroke_width=4,
+                stroke_fill=(0, 0, 0)
+            )
+
+        base_img.save(output_thumb_path, format="JPEG", quality=95)
+        alt_jpg = output_thumb_path.with_name(f"{video_path.stem}.jpg")
+        if alt_jpg != output_thumb_path:
+            base_img.save(alt_jpg, format="JPEG", quality=95)
+
+        temp_frame.unlink(missing_ok=True)
+        return output_thumb_path
+    except Exception as e:
+        print(f"[ThumbnailEngine] Error creating thumbnail: {e}")
+        temp_frame.unlink(missing_ok=True)
+        return output_thumb_path
+

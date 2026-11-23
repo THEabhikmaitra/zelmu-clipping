@@ -969,6 +969,22 @@ def upload_single_video(
         privacy=privacy_type
     )
 
+    # Auto-upload companion high-CTR thumbnail if present
+    thumb_candidates = [
+        file_path.with_suffix(".thumb.jpg"),
+        file_path.with_name(f"{file_path.stem}.thumb.jpg"),
+        file_path.with_suffix(".jpg"),
+        file_path.with_suffix(".png")
+    ]
+    thumb_to_upload = next((p for p in thumb_candidates if p.exists() and p != file_path), None)
+    if thumb_to_upload and video_id and youtube:
+        try:
+            thumb_media = MediaFileUpload(str(thumb_to_upload), mimetype="image/jpeg", resumable=False)
+            youtube.thumbnails().set(videoId=video_id, media_body=thumb_media).execute()
+            print(f"[Thumbnail] Auto-applied custom thumbnail to {video_id} ({thumb_to_upload.name})")
+        except Exception as e:
+            print(f"[Thumbnail] Notice: Could not apply API thumbnail ({e}). Frame-1 visual hook active in video.")
+
     # Explicitly release file handles to prevent WinError 32 on Windows
     if hasattr(media, "_fd") and media._fd:
         try:
@@ -980,11 +996,14 @@ def upload_single_video(
     import gc
     gc.collect()
 
-    # Permanently delete video file and sidecar from disk upon confirmed upload/schedule success
+    # Permanently delete video file, sidecar, and thumbnails from disk upon confirmed upload/schedule success
     try:
         sidecar_json = file_path.with_suffix(".json")
         if sidecar_json.exists():
             sidecar_json.unlink()
+        for tc in thumb_candidates:
+            if tc.exists() and tc != file_path:
+                tc.unlink()
         if file_path.exists():
             file_path.unlink()
     except Exception:

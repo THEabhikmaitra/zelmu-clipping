@@ -22,6 +22,7 @@ from editor import (
     generate_piper_tts,
     render_mode_a_short,
     render_mode_b_short,
+    generate_viral_thumbnail,
     stream_video_section_fast,
     download_video_section,
     get_best_video_encoder,
@@ -44,52 +45,55 @@ WORKSPACE_DIR = Path("workspace")
 
 
 def build_fallback_scripts(query: str, breakdown: List[str], news_titles: List[str]) -> Dict[str, Any]:
-    """Generates guaranteed viral scripts with Frame-0 Hooks and Seamless Loops when Ollama is offline or busy."""
+    """Generates guaranteed viral scripts using 3 proven 116M-view archetypes with Frame-0 Hooks and Debate Endings."""
     sub_topic1 = breakdown[1] if len(breakdown) > 1 else query
     sub_topic2 = breakdown[2] if len(breakdown) > 2 else query
-    news_snippet = news_titles[0] if news_titles else f"New breaking developments regarding {query} have just emerged."
+    news_snippet = news_titles[0] if news_titles else f"New breaking developments regarding {query} have just surfaced."
 
-    # Top-retention architecture: Frame-0 hook + 40-48 words + seamless loop bridge clause ending
+    # 3 High-Performing Archetypes: Debate-Sparking Questions, Subverted Expectation Claims, Direct Comparisons
     shorts = [
+        # Archetype 1: Debate-Sparking Questions
         {
-            "hook": f"⚡ SHOCKING {query.upper()}",
-            "title": f"The Shocking Truth About {query.title()}",
-            "script": f"Nobody was prepared for what just happened with {query}! In the past few hours, searches exploded by thousands of percent across the country. {news_snippet} Experts are warning this will reshape the conversation around {sub_topic1}, and the reason nobody saw this coming is that..."
+            "hook": "IS IT RUINED?",
+            "title": f"Is This Really A Major Problem For {query.title()}?",
+            "script": f"Is this actually a fatal flaw for {query}? Millions of fans are clashing online over leaked details tied to {sub_topic1}. While critics claim this completely ruins the release, insiders argue it will elevate the experience. Which side are you on? Comment below because..."
         },
         {
-            "hook": f"🚨 BREAKING {query.upper()}",
-            "title": f"Breaking Update: What Happened With {query.title()}",
-            "script": f"Stop scrolling if you haven't seen the breaking update on {query}! In the last hour alone, massive reports confirmed huge developments tied directly to {sub_topic1}. While mainstream feeds are playing catch-up, the real breakthrough all traces back to..."
+            "hook": "CAN IT BEAT IT?",
+            "title": f"Will {query.title()} Actually Beat The Competition?",
+            "script": f"Can {query} actually beat the highest industry benchmark ever set? Breaking reports regarding {sub_topic2} reveal massive upgrades that nobody anticipated. But will it be enough to dethrone previous records? Drop your thoughts below because the truth is..."
+        },
+        # Archetype 2: Subverted Expectation Claims
+        {
+            "hook": "DON'T BUY!",
+            "title": f"DO NOT Buy {query.title()} Before Watching This!",
+            "script": f"Do not make the biggest mistake with {query} until you know what just leaked! Everyone assumed {sub_topic1} was guaranteed, but new verified facts expose a harsh twist. Are fans being misled or is the hype justified? Tell me below because..."
         },
         {
-            "hook": f"🤯 3 INSANE FACTS",
-            "title": f"3 Insane Details About {query.title()}",
-            "script": f"Three insane facts about {query} that will blow your mind! Number one: search volume broke national records in under sixty minutes. Number two: alerts for {sub_topic1} jumped five hundred percent. And number three: the only thing everyone wants to know is..."
+            "hook": "BIGGEST LIE?",
+            "title": f"The Biggest Misconception About {query.title()}",
+            "script": f"Everything you were told about {query} might be completely backwards! Insiders just clarified the real story behind {sub_topic2}, and it directly contradicts the mainstream rumors. Did you fall for this rumor too? Let me know in the comments because..."
         },
         {
-            "hook": f"⚠️ WHY EVERYONE IS TALKING",
-            "title": f"Why Everyone Is Searching {query.title()}",
-            "script": f"Why is everybody suddenly obsessed with {query} right now? It all started when breaking reports surfaced online and caught the entire internet off guard. Millions are asking what this means for {sub_topic2}, which explains why..."
+            "hook": "HALF THE LENGTH?",
+            "title": f"{query.title()} Is Half The Scale We Were Promised...",
+            "script": f"Is {query} actually half the scale everyone was expecting? Panic erupted after community breakdowns revealed shocking details regarding {sub_topic1}. Is this a massive downgrade or overblown drama? Tell me your opinion below because..."
+        },
+        # Archetype 3: Direct Comparisons
+        {
+            "hook": "OLD VS NEW!",
+            "title": f"{query.title()} vs Previous Gen 🤯",
+            "script": f"Look at how insane the difference is between {query} and the previous standard! Side by side comparison shows upgrades in {sub_topic1} that took over a decade to engineer. Which version looks cleaner to you? Tell me below because..."
         },
         {
-            "hook": f"🔍 DEEP ANALYSIS",
-            "title": f"The Full Breakdown on {query.title()}",
-            "script": f"Here is the hidden truth about {query} you probably missed! The latest verified data reveals an unprecedented surge in interest centered on {sub_topic1}. While rumors are spreading wildly, the confirmed timeline proves..."
+            "hook": "13 YRS APART!",
+            "title": f"These Two Are Over A Decade Apart: {query.title()} Comparison",
+            "script": f"These two releases are over a decade apart and the visual jump is mind blowing! Comparing the physics in {query} against the old standard proves how far technology has evolved. Is the evolution worth the wait? Drop your vote below because..."
         },
         {
-            "hook": f"🔥 FINAL VERDICT",
-            "title": f"The Final Truth on {query.title()}",
-            "script": f"This changes everything we knew about {query}! Despite all the conflicting speculation online, verified facts show {sub_topic2} is at the absolute center of this viral moment. And if you still don't believe it..."
-        },
-        {
-            "hook": f"⚡ WHAT NOBODY TOLD YOU",
-            "title": f"What Nobody Is Telling You About {query.title()}",
-            "script": f"Here is what nobody in the media is telling you about {query}! While everyone is focusing on surface level updates, industry data reveals a massive quiet shift directly tied to {sub_topic1}. And the wildest detail is..."
-        },
-        {
-            "hook": f"🛑 WATCH BEFORE GONE",
-            "title": f"The Untold Reality of {query.title()}",
-            "script": f"Before you watch another clip about {query}, you need to understand this single fact! Searches just broke all-time high records in the United States because {sub_topic2} triggered an emergency response that nobody predicted, which proves why..."
+            "hook": "BLAND OR GENIUS?",
+            "title": f"Is {query.title()} Actually Overrated?",
+            "script": f"Is {query} genuinely revolutionary, or is the hype masking bland design? Millions are debating whether {sub_topic2} can deliver on years of expectations. Where do you stand on this debate? Let me know below because..."
         }
     ]
 
@@ -97,7 +101,7 @@ def build_fallback_scripts(query: str, breakdown: List[str], news_titles: List[s
 
 
 def generate_scripts_for_trend(trend: Dict[str, Any]) -> Dict[str, Any]:
-    """Generates 8 high-velocity Short scripts (with seamless loops) targeting Tier-1 US audience."""
+    """Generates 8 high-velocity Short scripts using 3 proven viral archetypes targeting Tier-1 US audience."""
     query = trend.get("query", "Viral Topic")
     breakdown = trend.get("trend_breakdown", [query])
     news_articles = trend.get("news_articles", [])
@@ -110,7 +114,7 @@ def generate_scripts_for_trend(trend: Dict[str, Any]) -> Dict[str, Any]:
     target_sec = learned_prompt.get("target_duration_sec", 30.0)
     target_words = learned_prompt.get("target_word_count", 48)
 
-    # Try Ollama JSON generation with strict Tier-1 US retention rules
+    # Ollama / Gemini prompt with 116M-view proven title & retention archetypes
     prompt = f"""You are an elite YouTube Shorts viral producer specializing in Tier-1 US audience content.
 A topic is currently experiencing a massive breakout in the United States:
 Topic: "{query}"
@@ -119,17 +123,23 @@ Recent headlines: {news_titles[:3]}
 Learned High-CPM tags: {learned_tags[:5]}
 Target video duration: {target_sec} seconds (~{target_words} words per Short)
 
-MANDATORY VIRAL RETENTION RULES:
+MANDATORY 116M-VIEW PROVEN VIRAL ARCHETYPES:
+Structure the 8 Shorts strictly across these 3 proven high-CTR formats:
+1. DEBATE-SPARKING QUESTIONS (e.g., "Is 30 FPS really a problem for...?", "Will X beat Y?"). Hook: 2-3 bold words ("IS IT RUINED?", "WORTH IT?").
+2. SUBVERTED EXPECTATION CLAIMS (e.g., "The Biggest Misconception About...", "DO NOT BUY...", "X is Half the Length..."). Hook: 2-3 bold words ("DON'T BUY!", "BIGGEST LIE").
+3. DIRECT COMPARISONS (e.g., "X vs Y 🤯", "These Two Are 13 Years Apart"). Hook: 2-3 bold words ("OLD VS NEW!", "13 YRS APART!").
+
+MANDATORY RETENTION & ENGAGEMENT RULES:
 1. TARGET AUDIENCE: Strict Tier-1 United States viewers. Natural American English phrasing.
 2. FRAME 0 HOOK: Start immediately with high curiosity, tension, or surprise. NEVER use greetings or intros ('Hey guys', 'Welcome back' are strictly forbidden).
-3. SEAMLESS LOOP: For each Short, the final sentence MUST grammatically connect into the opening hook phrase so the video loops endlessly when replayed.
+3. MANDATORY DEBATE ENDING: Every script MUST end with an explicit question prompting viewers to debate in the comments (e.g. "Which side are you on? Comment below because...", "Do you agree or are they wrong? Drop your thoughts below because...") connecting into the seamless loop bridge clause.
 4. CONCISE PACING: Strict 40-50 words per Short for maximum Average Percentage Viewed (APV > 80%).
 
 Write 8 high-energy viral Shorts scripts (each 40-50 words, 9:16 format).
 Return ONLY JSON with this schema:
 {{
   "shorts": [
-    {{"hook": "⚡ SHORT HOOK", "title": "Catchy Title #Shorts", "script": "Full spoken voiceover script text ending with seamless loop bridge clause..."}},
+    {{"hook": "BOLD 2-3 WORD HOOK", "title": "Archetype Title #Shorts", "script": "Full spoken voiceover script text ending with debate question and loop bridge clause..."}},
     ... (8 total)
   ]
 }}"""
@@ -378,6 +388,18 @@ def produce_trend_package(
             cut_vis.unlink(missing_ok=True)
 
             reel_title_clean = reel_title if "#shorts" in reel_title.lower() else f"{reel_title} #Shorts"
+            # Generate companion high-CTR 9:16 thumbnail image (saved as .thumb.jpg and .jpg for auto-upload)
+            try:
+                pill = "🔴 DEBATE" if "?" in reel_title else ("⚠️ ALERT" if "DON'T" in reel_title.upper() or "NOT" in reel_title.upper() else "⚡ COMPARISON")
+                generate_viral_thumbnail(
+                    video_path=final_mp4,
+                    hook_text=hook_txt,
+                    sub_text=reel_title_clean.replace("#Shorts", "").strip(),
+                    pill_tag=pill
+                )
+            except Exception as e:
+                print(f"[Thumbnail] Could not generate thumbnail: {e}")
+
             # Generate sidecar metadata JSON for YouTube Studio (Trend-specific, NO GTA6!)
             sidecar_p = final_mp4.with_suffix(".json")
             try:
