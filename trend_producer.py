@@ -45,55 +45,68 @@ WORKSPACE_DIR = Path("workspace")
 
 
 def build_fallback_scripts(query: str, breakdown: List[str], news_titles: List[str]) -> Dict[str, Any]:
-    """Generates guaranteed viral scripts using 3 proven 116M-view archetypes with Frame-0 Hooks and Debate Endings."""
+    """
+    Generates guaranteed viral scripts using the 28-32s Second-by-Second Mechanical Blueprint:
+    - 0:00-0:02: Micro-Hook
+    - 0:02-0:08: Context & Stakes
+    - 0:08-0:18: Rapid Proof & Escalation
+    - 0:18-0:25: Actionable Payoff
+    - 0:25-0:30: Debate Trigger & Seamless Loop Bridge
+    Length: Strict 75-85 words (~28.5s at 165 WPM).
+    """
     sub_topic1 = breakdown[1] if len(breakdown) > 1 else query
     sub_topic2 = breakdown[2] if len(breakdown) > 2 else query
     news_snippet = news_titles[0] if news_titles else f"New breaking developments regarding {query} have just surfaced."
 
     # 3 High-Performing Archetypes: Debate-Sparking Questions, Subverted Expectation Claims, Direct Comparisons
     shorts = [
-        # Archetype 1: Debate-Sparking Questions
+        # 1. Hardware / Spec Debate (30 FPS vs 60 FPS / Performance)
         {
             "hook": "IS IT RUINED?",
-            "title": f"Is This Really A Major Problem For {query.title()}?",
-            "script": f"Is this actually a fatal flaw for {query}? Millions of fans are clashing online over leaked details tied to {sub_topic1}. While critics claim this completely ruins the release, insiders argue it will elevate the experience. Which side are you on? Comment below because..."
+            "title": f"Is 30 FPS A Fatal Flaw For {query.title()}? #Shorts",
+            "script": f"Is this single technical limitation a fatal flaw for {query}? Millions of players are clashing online over leaked performance metrics tied to {sub_topic1}. While critics claim thirty frames ruins the modern experience, engine benchmarks reveal the bottleneck is memory bandwidth rather than raw compute. Tweaking one ambient setting regains twenty frames with zero visual compromise. Which side of this debate are you on? Drop your vote below because..."
         },
+        # 2. Benchmark Shootout (Console vs PC / Competition)
         {
             "hook": "CAN IT BEAT IT?",
-            "title": f"Will {query.title()} Actually Beat The Competition?",
-            "script": f"Can {query} actually beat the highest industry benchmark ever set? Breaking reports regarding {sub_topic2} reveal massive upgrades that nobody anticipated. But will it be enough to dethrone previous records? Drop your thoughts below because the truth is..."
+            "title": f"Will {query.title()} Beat The Highest Benchmark? #Shorts",
+            "script": f"Can {query} actually beat the highest graphical standard ever set? Breaking reports regarding {sub_topic2} reveal massive architectural upgrades that nobody anticipated. Testing under heavy scene stress proves lighting calculations hit solid targets, but thermal throttling remains a genuine risk on baseline hardware. Will this dethrone all previous industry benchmarks? Tell me your thoughts in the comments below because the real reason..."
         },
-        # Archetype 2: Subverted Expectation Claims
+        # 3. Contrarian Negative / Setting Warning
         {
             "hook": "DON'T BUY!",
-            "title": f"DO NOT Buy {query.title()} Before Watching This!",
-            "script": f"Do not make the biggest mistake with {query} until you know what just leaked! Everyone assumed {sub_topic1} was guaranteed, but new verified facts expose a harsh twist. Are fans being misled or is the hype justified? Tell me below because..."
+            "title": f"DO NOT Buy {query.title()} Before Checking This #Shorts",
+            "script": f"Do not make the biggest mistake with {query} until you check this critical setting! Everyone assumed maximum presets were guaranteed for {sub_topic1}, but verified stress tests expose a devastating forty percent frame drop. Dropping reflection geometry one notch instantly stabilizes frame pacing with identical fidelity. Are developers misleading buyers or is this completely normal? Let me know in the comments because..."
         },
+        # 4. Subverted Expectation / Misconception
         {
             "hook": "BIGGEST LIE?",
-            "title": f"The Biggest Misconception About {query.title()}",
-            "script": f"Everything you were told about {query} might be completely backwards! Insiders just clarified the real story behind {sub_topic2}, and it directly contradicts the mainstream rumors. Did you fall for this rumor too? Let me know in the comments because..."
+            "title": f"The Biggest Misconception About {query.title()} #Shorts",
+            "script": f"The biggest misconception about {query} is completely backwards! Online rumors claimed {sub_topic2} suffered catastrophic development delays, but financial disclosures prove production was shifted to synchronize with next-gen console adoption. Instead of cut content, internal milestones show double the density originally promised. Did you fall for the mainstream panic too? Tell me where you stand below because..."
         },
+        # 5. Length & Scope Controversy
         {
-            "hook": "HALF THE LENGTH?",
-            "title": f"{query.title()} Is Half The Scale We Were Promised...",
-            "script": f"Is {query} actually half the scale everyone was expecting? Panic erupted after community breakdowns revealed shocking details regarding {sub_topic1}. Is this a massive downgrade or overblown drama? Tell me your opinion below because..."
+            "hook": "HALF THE SCALE?",
+            "title": f"Is {query.title()} Half The Scale Promised? #Shorts",
+            "script": f"Is {query} actually half the scale everyone was promised? Community outrage erupted after data miners uncovered structural boundaries in {sub_topic1}. However, closer inspection reveals dense vertical environments replacing empty horizontal map space, creating three times more unique world encounters. Is compact depth superior to massive empty maps? Drop your opinion down below because..."
         },
-        # Archetype 3: Direct Comparisons
+        # 6. Direct Visual Comparison (Old vs New)
         {
             "hook": "OLD VS NEW!",
-            "title": f"{query.title()} vs Previous Gen 🤯",
-            "script": f"Look at how insane the difference is between {query} and the previous standard! Side by side comparison shows upgrades in {sub_topic1} that took over a decade to engineer. Which version looks cleaner to you? Tell me below because..."
+            "title": f"{query.title()} vs Previous Gen Comparison #Shorts",
+            "script": f"Look at the unbelievable visual jump between {query} and the previous generation! Side by side physics tests show water displacement and surface reflections in {sub_topic1} that took over a decade to engineer. Even on budget configurations, dynamic global illumination completely transforms the environment. Which visual style looks cleaner to your eyes? Tell me below because..."
         },
+        # 7. Nostalgia & Generational Comparison
         {
             "hook": "13 YRS APART!",
-            "title": f"These Two Are Over A Decade Apart: {query.title()} Comparison",
-            "script": f"These two releases are over a decade apart and the visual jump is mind blowing! Comparing the physics in {query} against the old standard proves how far technology has evolved. Is the evolution worth the wait? Drop your vote below because..."
+            "title": f"These Two Are 13 Years Apart: {query.title()} #Shorts",
+            "script": f"These two titles are over a decade apart and the mechanical leap is mind blowing! Running identical vehicle collision scripts in {query} against the old standard reveals physics calculations running at four times the internal tick rate. Is this revolutionary evolution worth the wait? Drop your verdict in the comments because..."
         },
+        # 8. Studio Economics & Behind-the-Scenes Deep Dive
         {
             "hook": "BLAND OR GENIUS?",
-            "title": f"Is {query.title()} Actually Overrated?",
-            "script": f"Is {query} genuinely revolutionary, or is the hype masking bland design? Millions are debating whether {sub_topic2} can deliver on years of expectations. Where do you stand on this debate? Let me know below because..."
+            "title": f"The Real Truth Behind {query.title()} Budget #Shorts",
+            "script": f"Is {query} genuinely revolutionary or is corporate hype masking cut corners? Studio budget breakdowns reveal two billion dollars invested directly into real-time NPC simulation for {sub_topic2}. While some call it excessive, early testing shows lifelike world behavior never before achieved in gaming. Are you hyped or skeptical about this direction? Let me know below because..."
         }
     ]
 
@@ -101,7 +114,7 @@ def build_fallback_scripts(query: str, breakdown: List[str], news_titles: List[s
 
 
 def generate_scripts_for_trend(trend: Dict[str, Any]) -> Dict[str, Any]:
-    """Generates 8 high-velocity Short scripts using 3 proven viral archetypes targeting Tier-1 US audience."""
+    """Generates 8 high-velocity Short scripts using the 28-32s mechanical blueprint targeting Tier-1 US audience."""
     query = trend.get("query", "Viral Topic")
     breakdown = trend.get("trend_breakdown", [query])
     news_articles = trend.get("news_articles", [])
@@ -111,35 +124,37 @@ def generate_scripts_for_trend(trend: Dict[str, Any]) -> Dict[str, Any]:
     learned_seo = get_learned_seo_boost()
     learned_prompt = get_optimized_prompt_injection()
     learned_tags = learned_seo.get("high_cpm_tags", [])
-    target_sec = learned_prompt.get("target_duration_sec", 30.0)
-    target_words = learned_prompt.get("target_word_count", 48)
+    target_sec = 30.0
+    target_words = 78  # Exact 75-85 words at 165 WPM = 28.5 to 31.0 seconds
 
-    # Ollama / Gemini prompt with 116M-view proven title & retention archetypes
-    prompt = f"""You are an elite YouTube Shorts viral producer specializing in Tier-1 US audience content.
-A topic is currently experiencing a massive breakout in the United States:
+    # Ollama / Gemini prompt strictly adhering to the High-Retention Blueprint
+    prompt = f"""You are an elite YouTube Shorts viral producer engineering top 0.00001% retention content for Tier-1 US audience.
+Topic currently breaking out in the United States:
 Topic: "{query}"
 Related keywords: {breakdown[:5]}
 Recent headlines: {news_titles[:3]}
-Learned High-CPM tags: {learned_tags[:5]}
-Target video duration: {target_sec} seconds (~{target_words} words per Short)
+High-CPM focus tags: {learned_tags[:5]}
 
-MANDATORY 116M-VIEW PROVEN VIRAL ARCHETYPES:
-Structure the 8 Shorts strictly across these 3 proven high-CTR formats:
-1. DEBATE-SPARKING QUESTIONS (e.g., "Is 30 FPS really a problem for...?", "Will X beat Y?"). Hook: 2-3 bold words ("IS IT RUINED?", "WORTH IT?").
-2. SUBVERTED EXPECTATION CLAIMS (e.g., "The Biggest Misconception About...", "DO NOT BUY...", "X is Half the Length..."). Hook: 2-3 bold words ("DON'T BUY!", "BIGGEST LIE").
-3. DIRECT COMPARISONS (e.g., "X vs Y 🤯", "These Two Are 13 Years Apart"). Hook: 2-3 bold words ("OLD VS NEW!", "13 YRS APART!").
+SECOND-BY-SECOND MECHANICAL PACING RHYTHM (STRICT 28-32s DURATION):
+- 0:00 - 0:02 | MICRO-HOOK: Hard provocative claim or dilemma. ZERO intros or greetings ("Hey guys" is strictly forbidden).
+- 0:02 - 0:08 | CONTEXT & STAKES: Introduce the exact technical tension or benchmark in one direct sentence without preamble.
+- 0:08 - 0:18 | RAPID PROOF & ESCALATION: Concrete data, hardware metrics, FPS numbers, or visual comparison proof points.
+- 0:18 - 0:25 | ACTIONABLE PAYOFF: Decisive verdict or actionable solution.
+- 0:25 - 0:30 | DEBATE TRIGGER & SEAMLESS LOOP: Final sentence poses a debate question and ends with an open-ended bridge clause (e.g. "...because the real reason is that...") that grammatically chains directly back into the opening hook phrase.
 
-MANDATORY RETENTION & ENGAGEMENT RULES:
-1. TARGET AUDIENCE: Strict Tier-1 United States viewers. Natural American English phrasing.
-2. FRAME 0 HOOK: Start immediately with high curiosity, tension, or surprise. NEVER use greetings or intros ('Hey guys', 'Welcome back' are strictly forbidden).
-3. MANDATORY DEBATE ENDING: Every script MUST end with an explicit question prompting viewers to debate in the comments (e.g. "Which side are you on? Comment below because...", "Do you agree or are they wrong? Drop your thoughts below because...") connecting into the seamless loop bridge clause.
-4. CONCISE PACING: Strict 40-50 words per Short for maximum Average Percentage Viewed (APV > 80%).
+HIGH-RPM THEMATIC FOCUS:
+Prioritize tech hardware shootouts (30 FPS vs 60 FPS, PC vs Console, settings optimization), game studio economics/budgets, and direct generational comparisons.
 
-Write 8 high-energy viral Shorts scripts (each 40-50 words, 9:16 format).
+SCRIPT REQUIREMENTS:
+1. Length: STRICTLY 75 to 85 words per script (no more, no less).
+2. Title: Under 55 characters, front-loaded primary keyword, core conflict, ending in #Shorts.
+3. Hook text: Concise 2-3 word bold hook for thumbnail text box (e.g., "IS IT RUINED?", "DON'T BUY!", "OLD VS NEW!").
+
+Write 8 high-energy viral Shorts scripts.
 Return ONLY JSON with this schema:
 {{
   "shorts": [
-    {{"hook": "BOLD 2-3 WORD HOOK", "title": "Archetype Title #Shorts", "script": "Full spoken voiceover script text ending with debate question and loop bridge clause..."}},
+    {{"hook": "BOLD 2-3 WORDS", "title": "Keyword Core Conflict #Shorts", "script": "Exact 75-85 word spoken voiceover text ending with debate trigger and loop bridge..."}},
     ... (8 total)
   ]
 }}"""
@@ -417,7 +432,7 @@ def produce_trend_package(
                             f"#Shorts #Trending #{safe_q} #News"
                         ),
                         "tags": [query, *trend.get("trend_breakdown", [])[:4], "Trending", "News", "Breaking News", "Breakout", "Shorts"],
-                        "category_id": "25",
+                        "category_id": "20",
                         "privacy_status": "public",
                         "approved": False,
                         "stage": "pending_quality_review",

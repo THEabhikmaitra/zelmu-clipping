@@ -108,11 +108,12 @@ def generate_karaoke_ass(
     output_ass_path.parent.mkdir(parents=True, exist_ok=True)
 
     if style_preset == "neon":
-        style_line = "Style: Default,Arial Black,74,&H00FFFF00,&H00D414E0,&H004B0082,&H99000000,-1,0,0,0,100,100,0,0,1,3,0,2,40,40,520,1"
+        style_line = "Style: Default,Arial Black,74,&H00FFFF00,&H00D414E0,&H004B0082,&H99000000,-1,0,0,0,100,100,0,0,1,6,2,2,40,40,520,1"
     elif style_preset == "clean":
-        style_line = "Style: Default,Arial Black,68,&H00FFFFFF,&H00FFFFFF,&H00181818,&H99000000,-1,0,0,0,100,100,0,0,1,3,0,2,40,40,520,1"
+        # Pure White text &H00FFFFFF, Electric Yellow highlight &H0000E5FF, 6px heavy black outline
+        style_line = "Style: Default,Arial Black,70,&H00FFFFFF,&H0000E5FF,&H00000000,&H99000000,-1,0,0,0,100,100,0,0,1,6,2,2,40,40,520,1"
     else:  # classic karaoke
-        style_line = "Style: Default,Arial Black,72,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,0,2,40,40,520,1"
+        style_line = "Style: Default,Arial Black,72,&H00FFFFFF,&H0000E5FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,2,2,40,40,520,1"
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -151,8 +152,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 "end": max(0.1, w_end)
             })
 
-    # Group into chunks of max_words_per_line
+    # Group into chunks of max_words_per_line (strict 2-3 words per on-screen burst)
     dialogues = []
+    danger_words = {"ruin", "ruined", "ruins", "fail", "failed", "worst", "crash", "bug", "mistake", "dont", "drop", "drops", "choke", "bland", "overrated", "warning", "dead", "fatal", "not"}
+
     for i in range(0, len(clip_words), max_words_per_line):
         group = clip_words[i:i + max_words_per_line]
         if not group:
@@ -168,8 +171,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             line_parts = []
             for idx, w in enumerate(group):
                 if idx == current_idx:
-                    # Active word in bright yellow &H0000FFFF with slight scale bump
-                    line_parts.append(r"{\c&H0000FFFF&\t(0,100,\fscx108\fscy108)}" + w["word"] + r"{\c&H00FFFFFF&\fscx100\fscy100}")
+                    # Dynamic color hierarchy: Neon Red &H004B33FF on danger words, Electric Yellow &H0000E5FF on high-intent words
+                    w_clean_lower = re.sub(r"[^\w]", "", w["word"]).lower()
+                    hl_color = r"&H004B33FF&" if w_clean_lower in danger_words else r"&H0000E5FF&"
+                    line_parts.append(r"{\c" + hl_color + r"\t(0,100,\fscx110\fscy110)}" + w["word"] + r"{\c&H00FFFFFF&\fscx100\fscy100}")
                 else:
                     line_parts.append(w["word"])
             
@@ -571,8 +576,8 @@ def render_mode_a_short(
 
     # Single-pass scale and anti-content-id evasion: scales directly to target dimensions
     scale_expr = "scale=1084:1928,crop=1080:1920:2:4" if enable_anti_content_id else "scale=1080:1920"
-    # Micro-pacing punch-in cut (3.2s cycle: alternating 1.0x and 1.08x zoom to reset viewer attention & boost retention)
-    zoom_filter = ",zoompan=z='if(mod(floor(on/90),2),1.08,1.0)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30" if enable_pacing_zoom else ""
+    # Mechanical Pacing: 0:00-0:02 snap zoom (1.18x), followed by rapid 1.5s cut/punch-in cycles (1.08x vs 1.0x)
+    zoom_filter = ",zoompan=z='if(between(on,0,45),1.18,if(mod(floor(on/45),2),1.08,1.0))':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30" if enable_pacing_zoom else ""
 
     tracking_keys = None
     if enable_tracking and not split_layout:
