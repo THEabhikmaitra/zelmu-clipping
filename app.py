@@ -2553,7 +2553,7 @@ def render_trend_hunter():
 
         niche_col1, niche_col2, niche_col3 = st.columns([1.5, 1.2, 1.3])
         with niche_col1:
-            niche_keyword = st.text_input("Filter Topic:", value="", placeholder="keyword...", key="trend_topic_filter")
+            niche_keyword = st.text_input("Filter Topic:", placeholder="keyword...", key="trend_topic_filter")
         with niche_col2:
             status_filter = st.selectbox(
                 "Video Status:",
@@ -2815,10 +2815,19 @@ def render_learned_topics():
 
     if boost.get("boost_keywords"):
         top_kw = boost["boost_keywords"][0]
-        if st.button(f"🎯 Apply Top Learned Keyword ('{top_kw}') to Stage 1 Research Filter", key="btn_apply_learned_kw", type="primary"):
-            st.session_state["trend_topic_filter"] = top_kw
-            st.success(f"✓ Research filtered by '{top_kw}'! Switch to 'Trends Hunter' tab.")
-            st.rerun()
+
+        def _apply_top_learned_kw(kw=top_kw):
+            st.session_state["trend_topic_filter"] = kw
+            st.session_state["applied_top_kw"] = kw
+
+        st.button(
+            f"🎯 Apply Top Learned Keyword ('{top_kw}') to Stage 1 Research Filter",
+            key="btn_apply_learned_kw",
+            type="primary",
+            on_click=_apply_top_learned_kw
+        )
+        if st.session_state.get("applied_top_kw"):
+            st.success(f"✓ Research filtered by '{st.session_state['applied_top_kw']}'! Switch to 'Trends Hunter' tab.")
 
 
 def render_instagram_clipper():
