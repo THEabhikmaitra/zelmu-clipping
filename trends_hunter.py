@@ -249,6 +249,7 @@ def fetch_google_trends_us(
 
             results.append({
                 "query": query,
+                "category_id": category_id,
                 "search_vol": traffic,
                 "search_vol_fmt": vol_str,
                 "search_vol_display": search_vol_display,

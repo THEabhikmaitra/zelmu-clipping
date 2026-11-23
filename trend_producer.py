@@ -30,7 +30,7 @@ from editor import (
     is_valid_video_file
 )
 from uploader import upload_batch_private, is_authenticated
-from trends_hunter import get_trend_news_articles, search_trend_source_videos
+from trends_hunter import get_trend_news_articles, search_trend_source_videos, fetch_youtube_search_breakouts
 from learning_engine import get_learned_seo_boost, get_optimized_prompt_injection
 from safety import is_cricket_or_broadcast_sports
 from arbiter import (
@@ -119,6 +119,10 @@ def generate_scripts_for_trend(trend: Dict[str, Any]) -> Dict[str, Any]:
     breakdown = trend.get("trend_breakdown", [query])
     news_articles = trend.get("news_articles", [])
     news_titles = [a["title"] for a in news_articles if isinstance(a, dict) and "title" in a]
+    yt_autocomplete = trend.get("yt_autocomplete")
+    if not yt_autocomplete:
+        yt_autocomplete = fetch_youtube_search_breakouts(query, max_items=8)
+        trend["yt_autocomplete"] = yt_autocomplete
 
     # Ingest Stage 6 Continuous Learning parameters
     learned_seo = get_learned_seo_boost()
@@ -134,6 +138,8 @@ Topic: "{query}"
 Related keywords: {breakdown[:5]}
 Recent headlines: {news_titles[:3]}
 High-CPM focus tags: {learned_tags[:5]}
+Real-Time YouTube Autocomplete Queries (What real US users are currently searching):
+{yt_autocomplete[:6]}
 
 SECOND-BY-SECOND MECHANICAL PACING RHYTHM (STRICT 28-32s DURATION):
 - 0:00 - 0:02 | MICRO-HOOK: Hard provocative claim or dilemma. ZERO intros or greetings ("Hey guys" is strictly forbidden).
@@ -143,7 +149,7 @@ SECOND-BY-SECOND MECHANICAL PACING RHYTHM (STRICT 28-32s DURATION):
 - 0:25 - 0:30 | DEBATE TRIGGER & SEAMLESS LOOP: Final sentence poses a debate question and ends with an open-ended bridge clause (e.g. "...because the real reason is that...") that grammatically chains directly back into the opening hook phrase.
 
 HIGH-RPM THEMATIC FOCUS:
-Prioritize tech hardware shootouts (30 FPS vs 60 FPS, PC vs Console, settings optimization), game studio economics/budgets, and direct generational comparisons.
+Prioritize tech hardware shootouts (30 FPS vs 60 FPS, PC vs Console, settings optimization), game studio economics/budgets, and direct generational comparisons. Ground hooks directly in the live YouTube autocomplete queries!
 
 SCRIPT REQUIREMENTS:
 1. Length: STRICTLY 75 to 85 words per script (no more, no less).
@@ -286,10 +292,19 @@ def produce_trend_package(
     log(f"🔥 Starting Trend Production for: '{query}'")
     update_status(1, "Step 1/5: AI Scripts", f"Generating 8 viral Shorts scripts for '{query}' (Tier-1 US)...", 15, 0, 0)
 
-    # Step 1: News & Scripts
-    log("Step 1/5: Fetching recent news headlines & generating AI scripts...")
+    # Step 1: News, YouTube Autocomplete Search Queries & Scripts
+    log("Step 1/5: Fetching real-time YouTube Autocomplete search phrases & generating AI scripts...")
+    if not trend.get("yt_autocomplete"):
+        trend["yt_autocomplete"] = fetch_youtube_search_breakouts(query, max_items=10)
+    yt_autocomplete = trend.get("yt_autocomplete", [])
+
     if not trend.get("news_articles"):
         trend["news_articles"] = get_trend_news_articles(query, max_articles=4)
+
+    # Dynamic category mapping: Google Trends category -> official YouTube Data API categoryId
+    cat_id_raw = trend.get("category_id") or 0
+    yt_cat_map = {8: "20", 5: "28", 3: "24", 16: "25", 7: "28", 20: "17"}
+    yt_category_id = yt_cat_map.get(cat_id_raw, "20")
 
     package_scripts = generate_scripts_for_trend(trend)
     shorts_scripts = package_scripts.get("shorts", [])[:8]
@@ -415,9 +430,21 @@ def produce_trend_package(
             except Exception as e:
                 print(f"[Thumbnail] Could not generate thumbnail: {e}")
 
-            # Generate sidecar metadata JSON for YouTube Studio (Trend-specific, NO GTA6!)
+            # Generate sidecar metadata JSON for YouTube Studio with real-time YouTube Autocomplete search SEO
             sidecar_p = final_mp4.with_suffix(".json")
             try:
+                # Deduplicate and build high-intent SEO tags (combining YouTube Autocomplete + Google Trends breakdown)
+                seo_tags = []
+                seen_tags = set()
+                raw_tag_sources = [query, *yt_autocomplete[:10], *trend.get("trend_breakdown", [])[:4], "Shorts", "Trending", "GamingTech"]
+                for t in raw_tag_sources:
+                    clean_t = str(t).strip()
+                    if clean_t and clean_t.lower() not in seen_tags and len(clean_t) <= 35:
+                        seen_tags.add(clean_t.lower())
+                        seo_tags.append(clean_t)
+
+                yt_queries_block = "\n".join(f"- {kw}" for kw in yt_autocomplete[:6]) if yt_autocomplete else f"- {query}"
+
                 with open(sidecar_p, "w", encoding="utf-8") as sf:
                     json.dump({
                         "title": reel_title_clean[:100],
@@ -427,12 +454,13 @@ def produce_trend_package(
                         "description": (
                             f"🔥 {reel_title}\n\n"
                             f"{script_txt}\n\n"
-                            f"Latest breaking developments on {query}.\n"
-                            f"Subscribe to @zelmuesports for real-time trending updates!\n\n"
-                            f"#Shorts #Trending #{safe_q} #News"
+                            f"🔍 Trending YouTube Search Queries:\n"
+                            f"{yt_queries_block}\n\n"
+                            f"Stay tuned to @zelmuesports for daily tech, gaming, and real-time trending breakdowns!\n\n"
+                            f"#Shorts #Trending #{safe_q} #GamingTech"
                         ),
-                        "tags": [query, *trend.get("trend_breakdown", [])[:4], "Trending", "News", "Breaking News", "Breakout", "Shorts"],
-                        "category_id": "20",
+                        "tags": seo_tags[:25],
+                        "category_id": str(yt_category_id),
                         "privacy_status": "public",
                         "approved": False,
                         "stage": "pending_quality_review",
