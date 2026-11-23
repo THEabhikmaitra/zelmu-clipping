@@ -260,6 +260,7 @@ def create_solid_color_broll(output_path: Path, duration: float, is_vertical: bo
 def produce_trend_package(
     trend: Dict[str, Any],
     auto_upload: bool = True,
+    max_shorts: int = 8,
     progress_callback: Optional[Any] = None,
     status_callback: Optional[Any] = None
 ) -> Dict[str, Any]:
@@ -307,7 +308,7 @@ def produce_trend_package(
     yt_category_id = yt_cat_map.get(cat_id_raw, "20")
 
     package_scripts = generate_scripts_for_trend(trend)
-    shorts_scripts = package_scripts.get("shorts", [])[:8]
+    shorts_scripts = package_scripts.get("shorts", [])[:max_shorts]
     landscapes_scripts = []
 
     # Step 2: Sourcing visual footage with Strict Copyright Shield

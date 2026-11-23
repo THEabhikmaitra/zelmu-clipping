@@ -22,15 +22,15 @@ def get_best_video_encoder() -> List[str]:
     try:
         res_qsv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_qsv", "-f", "null", "-"], capture_output=True, timeout=6)
         if res_qsv.returncode == 0:
-            _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23", "-async_depth", "4", "-look_ahead", "0", "-bf", "0"]
+            _BEST_ENCODER_CACHE = ["-r", "60", "-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23", "-async_depth", "4", "-look_ahead", "0", "-bf", "0"]
             return _BEST_ENCODER_CACHE
         res_nv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, timeout=6)
         if res_nv.returncode == 0:
-            _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "h264_nvenc", "-preset", "p1", "-cq", "23", "-bf", "0"]
+            _BEST_ENCODER_CACHE = ["-r", "60", "-c:v", "h264_nvenc", "-preset", "p1", "-cq", "23", "-bf", "0"]
             return _BEST_ENCODER_CACHE
     except Exception:
         pass
-    _BEST_ENCODER_CACHE = ["-fpsmax", "30", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-crf", "23", "-threads", "0"]
+    _BEST_ENCODER_CACHE = ["-r", "60", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-crf", "23", "-threads", "0"]
     return _BEST_ENCODER_CACHE
 
 def run_ffmpeg_with_cpu_fallback(cmd: List[str], timeout: int = 300) -> subprocess.CompletedProcess:
@@ -693,7 +693,6 @@ def render_mode_a_short(
         "-map", v_out_label,
         "-map", cur_audio,
         *get_best_video_encoder(),
-        "-r", "60",
         "-c:a", "aac",
         "-b:a", "128k",
         "-movflags", "+faststart",
