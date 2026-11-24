@@ -10,37 +10,46 @@ from safety import sanitize_filename, ADULT_MONETIZATION_RISK_KEYWORDS
 
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "qwen2.5:3b"
+_OLLAMA_SESSION = requests.Session()
 
-def query_ollama_json(prompt: str, retries: int = 2, timeout: int = 300) -> Optional[Dict[str, Any]]:
+
+def query_ollama_json(
+    prompt: str,
+    retries: int = 2,
+    timeout: int = 300,
+    num_predict: int = 512,
+    num_ctx: int = 1536,
+    model_name: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """
-    Queries local Ollama using JSON format, low temperature, and automatic retries.
+    Queries local Ollama using persistent HTTP session, JSON format, and tuned token budget.
+    Defaults to num_predict=512 (scalable up to 1400+ for multi-script batches so JSON never truncates).
     """
     payload = {
-        "model": MODEL_NAME,
+        "model": model_name or MODEL_NAME,
         "prompt": prompt,
         "format": "json",
         "stream": False,
         "options": {
             "temperature": 0.2,
-            "num_predict": 128,
-            "num_thread": 8,
-            "num_ctx": 1024
+            "num_predict": num_predict,
+            "num_thread": 6,
+            "num_ctx": num_ctx
         },
         "keep_alive": "1h"
     }
 
     for attempt in range(retries + 1):
         try:
-            resp = requests.post(OLLAMA_API_URL, json=payload, timeout=timeout)
+            resp = _OLLAMA_SESSION.post(OLLAMA_API_URL, json=payload, timeout=timeout)
             if resp.status_code == 200:
                 result = resp.json()
                 raw_response = result.get("response", "{}")
                 return json.loads(raw_response)
-        except Exception as e:
+        except Exception:
             if attempt == retries:
-                # Log or print error
                 pass
-            time.sleep(2)
+            time.sleep(0.5)
     return None
 
 def split_transcript_into_chunks(

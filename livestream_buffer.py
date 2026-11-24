@@ -21,7 +21,8 @@ from transcriber import (
     get_ffmpeg_path,
     get_video_metadata,
     extract_audio_wav,
-    transcribe_audio_whisper
+    transcribe_audio_whisper,
+    quick_http_is_youtube_live
 )
 from analyzer import extract_candidates_full, extract_top_speech_windows, detect_live_hyped_windows
 from editor import generate_karaoke_ass, render_mode_a_short, check_internet_connection, is_valid_video_file
@@ -205,9 +206,13 @@ def normalize_livestream_url(target: str) -> str:
 
 
 def check_if_stream_live(target_url: str) -> Optional[Dict[str, Any]]:
-    """Probes if a channel or URL is currently live broadcasting in ~2-3s."""
+    """Probes if a channel or URL is currently live via 0.7s HTTP pre-check -> yt-dlp only when active."""
     clean_url = normalize_livestream_url(target_url)
     if not clean_url:
+        return None
+
+    # Fast HTTP /live pre-check avoids launching yt-dlp + Node for offline channels (~0.7s vs ~4-6s)
+    if clean_url.endswith("/live") and quick_http_is_youtube_live(clean_url) is False:
         return None
 
     cmd = [
@@ -292,7 +297,7 @@ def capture_rolling_hls_slice(stream_input: Any, output_path: Path, duration_sec
             "-t", str(duration_sec),
             "-map", "0:v:0",
             "-map", "1:a:0",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "19",
+            "-c:v", "copy",
             "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
             str(part_path)
@@ -303,7 +308,7 @@ def capture_rolling_hls_slice(stream_input: Any, output_path: Path, duration_sec
             "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "3",
             "-i", v_url,
             "-t", str(duration_sec),
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "19",
+            "-c:v", "copy",
             "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
             str(part_path)
@@ -563,7 +568,7 @@ def process_livestream_slice(
             return final_dest
 
         rendered_files: List[Path] = []
-        pool_workers = min(3, max(1, len(candidates)))
+        pool_workers = min(2, max(1, len(candidates)))
         with concurrent.futures.ThreadPoolExecutor(max_workers=pool_workers) as pool:
             future_map = {pool.submit(process_live_short, c_idx, win): c_idx for c_idx, win in enumerate(candidates)}
             while any(not fut.done() for fut in future_map):
@@ -701,10 +706,14 @@ def run_livestream_loop():
         )
 
         active_found = 0
-        for ch in channels:
+        # Probe all channels concurrently (~0.8s total instead of sequential Node spawns)
+        probe_workers = min(5, max(1, len(channels)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=probe_workers) as probe_pool:
+            probed_results = list(probe_pool.map(lambda c: (c, check_if_stream_live(c)), channels))
+
+        for ch, live_info in probed_results:
             if _LIVE_STOP_EVENT.is_set():
                 break
-            live_info = check_if_stream_live(ch)
             if live_info and live_info.get("is_live"):
                 push_live_log(f"🔴 ACTIVE LIVESTREAM DETECTED: {live_info['title']} ({live_info['url']}) by @{live_info['channel']}")
                 slice_dur = cfg.get("slice_duration_seconds", 300)

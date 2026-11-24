@@ -5,12 +5,23 @@ import json
 import re
 import shutil
 import subprocess
+import threading
 import urllib.request
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
+
+_YTDLP_CMD_CACHE: Optional[List[str]] = None
+_FFMPEG_PATH_CACHE: Optional[Path] = None
+_WHISPER_MODEL_CACHE: Dict[Tuple[str, str], Any] = {}
+_WHISPER_LOCK = threading.Lock()
+
 
 def get_ytdlp_cmd() -> List[str]:
-    """Finds yt-dlp executable or falls back to python module execution."""
+    """Finds yt-dlp executable (cached) or falls back to python module execution."""
+    global _YTDLP_CMD_CACHE
+    if _YTDLP_CMD_CACHE is not None:
+        return list(_YTDLP_CMD_CACHE)
+
     base_cmd = []
     which_ytdlp = shutil.which("yt-dlp")
     if which_ytdlp:
@@ -29,14 +40,21 @@ def get_ytdlp_cmd() -> List[str]:
     # Accelerate cipher extraction with local Node.js if present
     if shutil.which("node"):
         base_cmd.extend(["--js-runtimes", "node", "--remote-components", "ejs:github"])
-    return base_cmd
+    _YTDLP_CMD_CACHE = base_cmd
+    return list(_YTDLP_CMD_CACHE)
+
 
 def get_ffmpeg_path() -> Optional[Path]:
-    """Finds ffmpeg executable from PATH or common Windows install locations."""
+    """Finds ffmpeg executable (cached) from PATH or common Windows install locations."""
+    global _FFMPEG_PATH_CACHE
+    if _FFMPEG_PATH_CACHE is not None and _FFMPEG_PATH_CACHE.exists():
+        return _FFMPEG_PATH_CACHE
+
     # Check standard PATH
     which_ffmpeg = shutil.which("ffmpeg")
     if which_ffmpeg:
-        return Path(which_ffmpeg).resolve()
+        _FFMPEG_PATH_CACHE = Path(which_ffmpeg).resolve()
+        return _FFMPEG_PATH_CACHE
 
     # Search common Windows winget / standard locations
     search_dirs = [
@@ -55,7 +73,34 @@ def get_ffmpeg_path() -> Optional[Path]:
                 bin_dir = str(matches[0].parent)
                 if bin_dir not in os.environ["PATH"]:
                     os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
-                return matches[0].resolve()
+                _FFMPEG_PATH_CACHE = matches[0].resolve()
+                return _FFMPEG_PATH_CACHE
+    return None
+
+
+def quick_http_is_youtube_live(target_url: str, timeout: float = 4.0) -> Optional[bool]:
+    """
+    Fast ~0.7s HTTP pre-check on YouTube `/live` endpoints to skip spawning yt-dlp + Node
+    for offline channels. Returns True if live, False if offline, None if inconclusive.
+    """
+    if "youtube.com" not in target_url and "youtu.be" not in target_url:
+        return None
+    try:
+        req = urllib.request.Request(
+            target_url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0",
+                "Accept-Language": "en-US,en;q=0.9"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            html = resp.read(2_500_000).decode("utf-8", errors="ignore")
+        if '"isLive":true' in html or '"isLiveBroadcast":true' in html:
+            return True
+        if "ytInitialPlayerResponse" in html or "ytInitialData" in html or 'rel="canonical"' in html:
+            return False
+    except Exception:
+        pass
     return None
 
 def get_video_metadata(url: str) -> Dict[str, Any]:
@@ -318,6 +363,13 @@ def fetch_youtube_captions(
 
     return transcript_data
 
+def unload_whisper_model():
+    """Frees cached WhisperModel pipelines from RAM when explicit reclamation is needed."""
+    with _WHISPER_LOCK:
+        _WHISPER_MODEL_CACHE.clear()
+        gc.collect()
+
+
 def transcribe_audio_whisper(
     audio_path: Path,
     output_json_path: Path,
@@ -326,8 +378,8 @@ def transcribe_audio_whisper(
     progress_callback: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
-    Runs faster-whisper with BatchedInference (8x threads) and int8 quantization.
-    Reports real-time segment progress and immediately cleans up RAM.
+    Runs faster-whisper with cached WhisperModel + BatchedInference singleton (eliminates 3s/clip reload
+    and prevents multi-model RAM thrashing on 8GB machines).
     """
     audio_path = audio_path.resolve()
     output_json_path = output_json_path.resolve()
@@ -339,18 +391,27 @@ def transcribe_audio_whisper(
 
     from faster_whisper import WhisperModel, BatchedInferencePipeline
 
-    if progress_callback:
-        progress_callback(0, 0, f"Initializing faster-whisper model ({model_size} int8 CPU)...")
+    cache_key = (model_size, compute_type)
+    threads = min(6, max(2, (os.cpu_count() or 8) - 2))
 
-    threads = min(16, os.cpu_count() or 8)
-    # Load model on CPU with int8 and max worker threads
-    model = WhisperModel(model_size, device="cpu", compute_type=compute_type, cpu_threads=threads)
-    batched_model = BatchedInferencePipeline(model=model)
+    with _WHISPER_LOCK:
+        batched_model = _WHISPER_MODEL_CACHE.get(cache_key)
+        if batched_model is None:
+            if progress_callback:
+                progress_callback(0, 0, f"Initializing cached faster-whisper ({model_size} {compute_type} {threads}T)...")
+            # Keep single cached instance in RAM to avoid repeated 3s loads and 8GB swapping
+            if len(_WHISPER_MODEL_CACHE) >= 1:
+                _WHISPER_MODEL_CACHE.clear()
+                gc.collect()
+            model = WhisperModel(model_size, device="cpu", compute_type=compute_type, cpu_threads=threads)
+            batched_model = BatchedInferencePipeline(model=model)
+            _WHISPER_MODEL_CACHE[cache_key] = batched_model
+        elif progress_callback:
+            progress_callback(0, 0, f"Using warm cached Whisper ({model_size})...")
 
-    if progress_callback:
-        progress_callback(0, 0, f"Batched model loaded in RAM ({threads} threads). Starting turbo transcription...")
-    
-    try:
+        if progress_callback:
+            progress_callback(0, 0, f"Starting turbo transcription ({threads} threads)...")
+
         segments, info = batched_model.transcribe(
             str(audio_path),
             batch_size=16,
@@ -386,22 +447,11 @@ def transcribe_audio_whisper(
             if progress_callback:
                 progress_callback(segment.end, info.duration, segment.text.strip())
 
-        # Save checkpoint immediately
-        with open(output_json_path, "w", encoding="utf-8") as f:
-            json.dump(transcript_data, f, indent=2, ensure_ascii=False)
+    # Save checkpoint immediately
+    with open(output_json_path, "w", encoding="utf-8") as f:
+        json.dump(transcript_data, f, indent=2, ensure_ascii=False)
 
-        return transcript_data
-    finally:
-        # Sequential RAM Cleanup: strictly delete batched pipeline + base model and force garbage collection
-        try:
-            del batched_model
-        except Exception:
-            pass
-        try:
-            del model
-        except Exception:
-            pass
-        gc.collect()
+    return transcript_data
 
 
 def expand_source_urls(raw_urls_text: str, max_playlist_items: int = 50) -> List[str]:

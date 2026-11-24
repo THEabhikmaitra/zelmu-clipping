@@ -583,16 +583,21 @@ def quick_fix_seo(raw_title: str, is_vertical: bool = True) -> Tuple[str, str, L
     return fixed_title, description, tags
 
 
-def cleanup_stale_workspaces(workspace_dir: Path = WORKSPACE_DIR, max_age_days: int = 7) -> int:
+def cleanup_stale_workspaces(
+    workspace_dir: Path = WORKSPACE_DIR,
+    max_age_days: int = 7,
+    max_age_hours: Optional[int] = None
+) -> int:
     """
-    Safely prunes stale temporary folders and intermediate clips older than max_age_days
+    Safely prunes stale temporary folders and intermediate clips older than max_age_hours/max_age_days
     to protect system SSD capacity from fragmentation.
     """
     if not workspace_dir.exists():
         return 0
 
     now = time.time()
-    cutoff = now - (max_age_days * 86400)
+    age_sec = (max_age_hours * 3600) if max_age_hours is not None else (max_age_days * 86400)
+    cutoff = now - age_sec
     cleaned = 0
 
     try:

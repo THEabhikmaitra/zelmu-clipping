@@ -240,7 +240,7 @@ Return ONLY JSON:
 }}"""
 
     try:
-        res = query_ollama_json(prompt, retries=1, timeout=25)
+        res = query_ollama_json(prompt, retries=1, timeout=45, num_predict=1400, num_ctx=2048)
         if res and isinstance(res, dict) and "shorts" in res and len(res["shorts"]) >= 3:
             return res["shorts"][:6]
     except Exception:

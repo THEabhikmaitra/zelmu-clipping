@@ -165,7 +165,7 @@ Return ONLY JSON with this schema:
   ]
 }}"""
     try:
-        ollama_res = query_ollama_json(prompt, retries=1, timeout=45)
+        ollama_res = query_ollama_json(prompt, retries=1, timeout=60, num_predict=1400, num_ctx=2048)
         if ollama_res and "shorts" in ollama_res and len(ollama_res["shorts"]) >= 6:
             return {"shorts": ollama_res["shorts"][:8], "landscapes": []}
     except Exception:
@@ -241,19 +241,27 @@ def get_audio_duration(audio_path: Path) -> float:
         return 30.0
 
 
-def create_solid_color_broll(output_path: Path, duration: float, is_vertical: bool = True) -> Path:
-    """Generates sleek dark news studio motion backdrop with vignette and subtle ambient particles (100% copyright-free)."""
+def create_solid_color_broll(output_path: Path, duration: float = 20.0, is_vertical: bool = True) -> Path:
+    """Generates sleek dark news studio motion backdrop via QSV/ultrafast (100% copyright-free)."""
     ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
     size_str = "1080x1920" if is_vertical else "1920x1080"
+    enc_args = get_best_video_encoder()
     cmd = [
         ffmpeg_bin, "-y",
         "-f", "lavfi",
-        "-i", f"color=c=0x070c18:s={size_str}:d={duration:.2f}",
+        "-i", f"color=c=0x070c18:s={size_str}:r=30:d={duration:.2f}",
         "-vf", "noise=c1s=8:c1f=t+u,eq=contrast=1.12:brightness=-0.04,vignette=PI/4",
-        "-c:v", "libx264", "-preset", "ultrafast",
+        *enc_args,
         str(output_path)
     ]
-    subprocess.run(cmd, capture_output=True)
+    res = subprocess.run(cmd, capture_output=True)
+    if res.returncode != 0 or not is_valid_video_file(output_path):
+        subprocess.run([
+            ffmpeg_bin, "-y",
+            "-f", "lavfi", "-i", f"color=c=0x070c18:s={size_str}:r=30:d={duration:.2f}",
+            "-c:v", "libx264", "-preset", "ultrafast",
+            str(output_path)
+        ], capture_output=True)
     return output_path
 
 
@@ -293,14 +301,16 @@ def produce_trend_package(
     log(f"🔥 Starting Trend Production for: '{query}'")
     update_status(1, "Step 1/5: AI Scripts", f"Generating 8 viral Shorts scripts for '{query}' (Tier-1 US)...", 15, 0, 0)
 
-    # Step 1: News, YouTube Autocomplete Search Queries & Scripts
-    log("Step 1/5: Fetching real-time YouTube Autocomplete search phrases & generating AI scripts...")
-    if not trend.get("yt_autocomplete"):
-        trend["yt_autocomplete"] = fetch_youtube_search_breakouts(query, max_items=10)
+    # Step 1: Parallel News + YouTube Autocomplete Search Queries, then Scripts
+    log("Step 1/5: Fetching YouTube Autocomplete & News concurrently, then generating AI scripts...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as meta_pool:
+        fut_ac = meta_pool.submit(fetch_youtube_search_breakouts, query, 10) if not trend.get("yt_autocomplete") else None
+        fut_news = meta_pool.submit(get_trend_news_articles, query, 4) if not trend.get("news_articles") else None
+        if fut_ac is not None:
+            trend["yt_autocomplete"] = fut_ac.result()
+        if fut_news is not None:
+            trend["news_articles"] = fut_news.result()
     yt_autocomplete = trend.get("yt_autocomplete", [])
-
-    if not trend.get("news_articles"):
-        trend["news_articles"] = get_trend_news_articles(query, max_articles=4)
 
     # Dynamic category mapping: Google Trends category -> official YouTube Data API categoryId
     cat_id_raw = trend.get("category_id") or 0
@@ -320,7 +330,6 @@ def produce_trend_package(
     )
 
     source_clip_vertical = None
-    source_clip_landscape = None
 
     if is_protected_sports:
         log(f"🛡️ STRICT COPYRIGHT SHIELD ACTIVE: '{query}' involves cricket / protected broadcast sports.")
@@ -340,15 +349,12 @@ def produce_trend_package(
                     download_video_section(top_url, start_sec=10.0, end_sec=55.0, output_mp4_path=raw_dl)
                     if is_valid_video_file(raw_dl):
                         source_clip_vertical = raw_dl
-                        source_clip_landscape = raw_dl
                 except Exception as e:
                     log(f"⚠️ YouTube clip download failed: {e}")
 
-    # Fallback B-roll if needed
+    # Fallback B-roll (20s loopable QSV clip; skip dead landscape broll generation when landscapes_scripts is empty)
     if not source_clip_vertical or not is_valid_video_file(source_clip_vertical):
-        source_clip_vertical = create_solid_color_broll(work_dir / "broll_vert.mp4", duration=45.0, is_vertical=True)
-    if not source_clip_landscape or not is_valid_video_file(source_clip_landscape):
-        source_clip_landscape = create_solid_color_broll(work_dir / "broll_land.mp4", duration=150.0, is_vertical=False)
+        source_clip_vertical = create_solid_color_broll(work_dir / "broll_vert.mp4", duration=20.0, is_vertical=True)
 
     rendered_shorts = []
     rendered_landscapes = []
@@ -382,29 +388,10 @@ def produce_trend_package(
             # Output path
             final_mp4 = READY_DIR / f"Short_{safe_q}_{r_idx+1}_{ts}.mp4"
 
-            # Combine video + Piper TTS via Mode A
-            # Visual scene stagger: offset each short by (r_idx * 11) % 60 to prevent duplicate background frames
-            broll_offset = (r_idx * 11) % 60
-            cut_vis = work_dir / f"vis_short_{r_idx}.mp4"
-            subprocess.run([
-                "ffmpeg", "-y",
-                "-ss", f"{broll_offset:.1f}",
-                "-stream_loop", "-1",
-                "-i", str(source_clip_vertical),
-                "-i", str(wav_path),
-                "-t", f"{dur:.2f}",
-                "-map", "0:v:0",
-                "-map", "1:a:0",
-                "-c:v", "copy",
-                "-c:a", "aac",
-                str(cut_vis)
-            ], capture_output=True)
-
-            if not is_valid_video_file(cut_vis):
-                return None
-
+            # Visual scene stagger & single-pass B-roll + TTS render (eliminates cut_vis intermediate FFmpeg pass)
+            broll_offset = (r_idx * 5) % 15
             render_mode_a_short(
-                source_video=cut_vis,
+                source_video=source_clip_vertical,
                 ass_subtitles=ass_path,
                 output_short_path=final_mp4,
                 flagged_profanities=[],
@@ -414,9 +401,12 @@ def produce_trend_package(
                 enable_pacing_zoom=True,       # 1.5s dynamic punch-in attention resets @ 60 FPS
                 enable_anti_content_id=False,  # NO pitch shift / audio speed altering
                 enable_music_ducking=False,    # NO phonk beat
-                enable_sfx=True                # Hard impact / whoosh SFX hits on frame 1
+                enable_sfx=True,               # Hard impact / whoosh SFX hits on frame 1
+                audio_override=wav_path,
+                input_offset=broll_offset,
+                input_duration=dur,
+                loop_input=True
             )
-            cut_vis.unlink(missing_ok=True)
 
             reel_title_clean = reel_title if "#shorts" in reel_title.lower() else f"{reel_title} #Shorts"
             # Generate companion high-CTR 9:16 thumbnail image (saved as .thumb.jpg and .jpg for auto-upload)
@@ -471,7 +461,7 @@ def produce_trend_package(
             return final_mp4
 
         total_shorts_count = len(shorts_scripts)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             fut_map = {pool.submit(render_single_reel, idx, item): idx for idx, item in enumerate(shorts_scripts)}
             for fut in concurrent.futures.as_completed(fut_map):
                 res_p = fut.result()

@@ -4,13 +4,20 @@ import subprocess
 import json
 import re
 import time
+import shutil
+import threading
+import wave
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from safety import mask_text, build_audio_mute_filter, find_profanities_in_words
 from transcriber import get_ffmpeg_path, get_ytdlp_cmd
 
 _BEST_ENCODER_CACHE = None
+_ENCODER_LOCK = threading.Lock()
 _STREAM_URL_CACHE: Dict[str, Tuple[float, Tuple[str, str]]] = {}
+_PIPER_VOICE_CACHE: Dict[str, Any] = {}
+_PIPER_LOCK = threading.Lock()
+
 
 def get_best_video_encoder() -> List[str]:
     """Detects fastest available hardware encoder (Intel QSV > NVENC > CPU ultrafast)."""
@@ -18,20 +25,24 @@ def get_best_video_encoder() -> List[str]:
     if _BEST_ENCODER_CACHE is not None:
         return _BEST_ENCODER_CACHE
 
-    ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
-    try:
-        res_qsv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_qsv", "-f", "null", "-"], capture_output=True, timeout=6)
-        if res_qsv.returncode == 0:
-            _BEST_ENCODER_CACHE = ["-r", "60", "-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23", "-async_depth", "4", "-look_ahead", "0", "-bf", "0"]
+    with _ENCODER_LOCK:
+        if _BEST_ENCODER_CACHE is not None:
             return _BEST_ENCODER_CACHE
-        res_nv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, timeout=6)
-        if res_nv.returncode == 0:
-            _BEST_ENCODER_CACHE = ["-r", "60", "-c:v", "h264_nvenc", "-preset", "p1", "-cq", "23", "-bf", "0"]
-            return _BEST_ENCODER_CACHE
-    except Exception:
-        pass
-    _BEST_ENCODER_CACHE = ["-r", "60", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-crf", "23", "-threads", "0"]
-    return _BEST_ENCODER_CACHE
+
+        ffmpeg_bin = str(get_ffmpeg_path() or "ffmpeg")
+        try:
+            res_qsv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_qsv", "-f", "null", "-"], capture_output=True, timeout=6)
+            if res_qsv.returncode == 0:
+                _BEST_ENCODER_CACHE = ["-r", "60", "-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23", "-async_depth", "4", "-look_ahead", "0", "-bf", "0"]
+                return _BEST_ENCODER_CACHE
+            res_nv = subprocess.run([ffmpeg_bin, "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, timeout=6)
+            if res_nv.returncode == 0:
+                _BEST_ENCODER_CACHE = ["-r", "60", "-c:v", "h264_nvenc", "-preset", "p1", "-cq", "23", "-bf", "0"]
+                return _BEST_ENCODER_CACHE
+        except Exception:
+            pass
+        _BEST_ENCODER_CACHE = ["-r", "60", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-crf", "23", "-threads", "2"]
+        return _BEST_ENCODER_CACHE
 
 def run_ffmpeg_with_cpu_fallback(cmd: List[str], timeout: int = 300) -> subprocess.CompletedProcess:
     """Runs FFmpeg command with timeout; if GPU/QSV encoder initialization fails, retries on CPU libx264."""
@@ -414,8 +425,8 @@ def generate_piper_tts(
     model_onnx_path: Path = Path("en_US-ryan-high.onnx")
 ) -> Path:
     """
-    Generates offline narration via python -m piper.
-    Guards against empty input to prevent Python wave.Error (# channels not specified).
+    Generates offline narration via cached in-process PiperVoice singleton (~5x faster than cold CLI spawns),
+    falling back to `python -m piper` subprocess only if in-process load fails.
     """
     output_wav_path = output_wav_path.resolve()
     output_wav_path.parent.mkdir(parents=True, exist_ok=True)
@@ -428,11 +439,26 @@ def generate_piper_tts(
     if not model_onnx_path.exists():
         raise FileNotFoundError(f"Piper ONNX model not found: {model_onnx_path}")
 
-    # Use active python interpreter
+    model_key = str(model_onnx_path)
+    try:
+        from piper import PiperVoice
+        with _PIPER_LOCK:
+            voice = _PIPER_VOICE_CACHE.get(model_key)
+            if voice is None:
+                voice = PiperVoice.load(model_key)
+                _PIPER_VOICE_CACHE[model_key] = voice
+            with wave.open(str(output_wav_path), "wb") as wf:
+                voice.synthesize_wav(clean_text, wf)
+        if output_wav_path.exists() and output_wav_path.stat().st_size > 1000:
+            return output_wav_path
+    except Exception:
+        pass
+
+    # Fallback: standalone subprocess execution
     cmd = [
         sys.executable,
         "-m", "piper",
-        "-m", str(model_onnx_path),
+        "-m", model_key,
         "-f", str(output_wav_path)
     ]
 
@@ -527,7 +553,11 @@ def render_mode_a_short(
     enable_anti_content_id: bool = True,
     enable_music_ducking: bool = False,
     enable_sfx: bool = True,
-    enable_pacing_zoom: bool = True
+    enable_pacing_zoom: bool = True,
+    audio_override: Optional[Path] = None,
+    input_offset: float = 0.0,
+    input_duration: Optional[float] = None,
+    loop_input: bool = False
 ) -> Path:
     """
     Renders Mode A viral short:
@@ -540,6 +570,7 @@ def render_mode_a_short(
     - Algorithmic SFX punch-in transition triggers on frame 1.
     - Optional channel logo/watermark overlay (top-right safe zone).
     - Profanity audio mute (0.4s).
+    - Optional audio_override + loop_input single-pass B-roll rendering (skips intermediate mux I/O).
     - Hardware acceleration: Intel QSV (350+ fps) or CPU fallback.
     """
     output_short_path = output_short_path.resolve()
@@ -574,10 +605,17 @@ def render_mode_a_short(
                 f"x=(w-text_w)/2:y=380:box=1:boxcolor=black@0.85:boxborderw=16:enable='between(t,0,1.5)'"
             )
 
-    # Single-pass scale and anti-content-id evasion: scales directly to target dimensions
-    scale_expr = "scale=1084:1928,crop=1080:1920:2:4" if enable_anti_content_id else "scale=1080:1920"
-    # Mechanical Pacing @ 60 FPS: 0:00-0:01.5 snap zoom (1.18x on frames 0-90), followed by 1.5s cut/punch-in cycles (1.08x vs 1.0x every 90 frames)
-    zoom_filter = ",zoompan=z='if(between(on,0,90),1.18,if(mod(floor(on/90),2),1.08,1.0))':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=60" if enable_pacing_zoom else ""
+    # Run zoompan at 540x960 BEFORE upscaling to 1080x1920:flags=fast_bilinear (~2x faster CPU filter),
+    # then render crisp subtitles + hook text + watermark at full native 1080x1920.
+    up_scale_expr = "scale=1084:1928:flags=fast_bilinear,crop=1080:1920:2:4" if enable_anti_content_id else "scale=1080:1920:flags=fast_bilinear"
+    if enable_pacing_zoom:
+        zoom_chain = (
+            "scale=540:960:flags=fast_bilinear,"
+            "zoompan=z='if(between(on,0,90),1.18,if(mod(floor(on/90),2),1.08,1.0))':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=540x960:fps=60,"
+            f"{up_scale_expr}"
+        )
+    else:
+        zoom_chain = up_scale_expr
 
     tracking_keys = None
     if enable_tracking and not split_layout:
@@ -592,14 +630,14 @@ def render_mode_a_short(
         crop_x = generate_panning_crop_expr(tracking_keys)
         base_filter = (
             f"[0:v]crop=in_h*9/16:in_h:'{crop_x}':0,"
-            f"{scale_expr}{zoom_filter},"
+            f"{zoom_chain},"
             f"subtitles='{esc_sub}'"
             f"{hook_filter_str}"
         )
     elif not split_layout:
         base_filter = (
             f"[0:v]crop=in_h*9/16:in_h:(in_w-in_h*9/16)/2:0,"
-            f"{scale_expr}{zoom_filter},"
+            f"{zoom_chain},"
             f"subtitles='{esc_sub}'"
             f"{hook_filter_str}"
         )
@@ -611,19 +649,38 @@ def render_mode_a_short(
             "bottom-right": "in_w*0.65:in_h*0.55"
         }
         cam_xy = cam_coords.get(facecam_position.lower(), "0:0")
-        stack_cid = ",scale=1084:1928,crop=1080:1920:2:4" if enable_anti_content_id else ""
+        cam_w, cam_h, game_h = (540, 336, 624) if enable_pacing_zoom else (1080, 672, 1248)
+        post_stack = (
+            f"zoompan=z='if(between(on,0,90),1.18,if(mod(floor(on/90),2),1.08,1.0))':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=540x960:fps=60,{up_scale_expr}"
+            if enable_pacing_zoom
+            else ("scale=1084:1928:flags=fast_bilinear,crop=1080:1920:2:4" if enable_anti_content_id else "")
+        )
+        post_stack_comma = f",{post_stack}" if post_stack else ""
         base_filter = (
             f"[0:v]split=2[cam][game];"
-            f"[cam]crop=in_w*0.35:in_h*0.45:{cam_xy},scale=1080:672[top];"
-            f"[game]crop=in_h*9/16:in_h:(in_w-in_h*9/16)/2:0,scale=1080:1248[bot];"
+            f"[cam]crop=in_w*0.35:in_h*0.45:{cam_xy},scale={cam_w}:{cam_h}:flags=fast_bilinear[top];"
+            f"[game]crop=in_h*9/16:in_h:(in_w-in_h*9/16)/2:0,scale={cam_w}:{game_h}:flags=fast_bilinear[bot];"
             f"[top][bot]vstack=inputs=2"
-            f"{stack_cid}{zoom_filter},"
+            f"{post_stack_comma},"
             f"subtitles='{esc_sub}'"
             f"{hook_filter_str}"
         )
 
-    input_args = ["-hwaccel", "auto", "-i", str(source_video.resolve())]
+    input_args = ["-hwaccel", "auto"]
+    if input_offset > 0:
+        input_args.extend(["-ss", f"{input_offset:.2f}"])
+    if loop_input:
+        input_args.extend(["-stream_loop", "-1"])
+    input_args.extend(["-i", str(source_video.resolve())])
     input_count = 1
+
+    has_audio_override = bool(audio_override and Path(audio_override).exists())
+    if has_audio_override:
+        input_args.extend(["-i", str(Path(audio_override).resolve())])
+        audio_override_idx = input_count
+        input_count += 1
+    else:
+        audio_override_idx = None
 
     if has_logo:
         actual_logo_path, logo_prep, logo_coords = wm_overlay
@@ -669,7 +726,7 @@ def render_mode_a_short(
     if enable_anti_content_id:
         audio_chain.append("asetrate=44100*1.003,atempo=1/1.003")
 
-    cur_audio = "0:a"
+    cur_audio = f"{audio_override_idx}:a" if audio_override_idx is not None else "0:a"
     if audio_chain:
         fc_parts.append(f"[{cur_audio}]{','.join(audio_chain)}[a_base]")
         cur_audio = "[a_base]"
@@ -686,12 +743,15 @@ def render_mode_a_short(
 
     filter_complex_str = ";".join(fc_parts)
 
+    dur_args = ["-t", f"{input_duration:.2f}"] if input_duration and input_duration > 0 else []
+
     cmd = [
         ffmpeg_bin, "-y",
         *input_args,
         "-filter_complex", filter_complex_str,
         "-map", v_out_label,
         "-map", cur_audio,
+        *dur_args,
         *get_best_video_encoder(),
         "-c:a", "aac",
         "-b:a", "128k",
@@ -947,10 +1007,10 @@ def generate_viral_thumbnail(
                 stroke_fill=(0, 0, 0)
             )
 
-        base_img.save(output_thumb_path, format="JPEG", quality=95)
+        base_img.save(output_thumb_path, format="JPEG", quality=92)
         alt_jpg = output_thumb_path.with_name(f"{video_path.stem}.jpg")
         if alt_jpg != output_thumb_path:
-            base_img.save(alt_jpg, format="JPEG", quality=95)
+            shutil.copy2(output_thumb_path, alt_jpg)
 
         temp_frame.unlink(missing_ok=True)
         return output_thumb_path

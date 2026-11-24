@@ -22,7 +22,8 @@ from transcriber import (
     get_video_metadata,
     fetch_youtube_captions,
     extract_audio_wav,
-    transcribe_audio_whisper
+    transcribe_audio_whisper,
+    quick_http_is_youtube_live
 )
 from analyzer import extract_candidates_full
 from editor import generate_karaoke_ass, render_mode_a_short, check_internet_connection
@@ -209,6 +210,9 @@ def get_channel_live_video(channel_url: str) -> Optional[Dict[str, Any]]:
     if "/videos" in clean_url:
         clean_url = clean_url.replace("/videos", "")
     live_target = f"{clean_url}/live"
+
+    if quick_http_is_youtube_live(live_target) is False:
+        return None
 
     cmd = [
         *get_ytdlp_cmd(),
@@ -557,7 +561,7 @@ def process_video_autonomous(
             time.sleep(3)
             acquire_compute_lock("watcher", PRIORITY_VOD, f"VOD: {title[:25]}", timeout=900.0)
 
-        pool_workers = min(3, max(1, total_cands))
+        pool_workers = min(2, max(1, total_cands))
         with concurrent.futures.ThreadPoolExecutor(max_workers=pool_workers) as pool:
             future_map = {pool.submit(process_watcher_clip, c_idx, cand): c_idx for c_idx, cand in enumerate(candidates)}
             while any(not fut.done() for fut in future_map):

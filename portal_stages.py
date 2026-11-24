@@ -96,8 +96,15 @@ def get_pipeline_telemetry(ready_dir: Path) -> Dict[str, Any]:
     }
 
 
+_TELEMETRY_SNAP_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
+
+
 def get_system_telemetry_snapshot() -> Dict[str, Any]:
-    """Captures real-time system, drive, crawler, quota, and AI telemetry parameters."""
+    """Captures real-time system, drive, crawler, quota, and AI telemetry parameters (10s TTL cached)."""
+    now = time.time()
+    cached = _TELEMETRY_SNAP_CACHE.get("data")
+    if cached is not None and (now - _TELEMETRY_SNAP_CACHE["ts"]) < 10.0:
+        return cached
     try:
         du = shutil.disk_usage(".")
         free_gb = du.free / (1024 ** 3)
@@ -150,7 +157,7 @@ def get_system_telemetry_snapshot() -> Dict[str, Any]:
         has_secrets = False
         token_count = 0
 
-    return {
+    res_snap = {
         "free_gb": free_gb,
         "total_gb": total_gb,
         "free_pct": free_pct,
@@ -167,6 +174,9 @@ def get_system_telemetry_snapshot() -> Dict[str, Any]:
         "has_secrets": has_secrets,
         "token_count": token_count
     }
+    _TELEMETRY_SNAP_CACHE["ts"] = now
+    _TELEMETRY_SNAP_CACHE["data"] = res_snap
+    return res_snap
 
 
 def _render_telemetry_metrics_grid(snap: Dict[str, Any]):

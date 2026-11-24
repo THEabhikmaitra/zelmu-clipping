@@ -28,10 +28,7 @@ def format_elapsed(seconds: float) -> str:
     s = sec % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-import importlib
-for _mod_name in ["transcriber", "editor", "analyzer", "safety", "uploader"]:
-    if _mod_name in sys.modules:
-        importlib.reload(sys.modules[_mod_name])
+# Keep module-level singletons/caches (FFmpeg QSV probe, Piper voice, Whisper model, stream URLs) warm across Streamlit reruns.
 
 from safety import sanitize_filename, find_profanities_in_words
 from transcriber import (
@@ -713,6 +710,7 @@ def get_video_id(url: str) -> str:
     # Fallback to MD5 hash for arbitrary Twitch/other URLs
     return hashlib.md5(url.strip().encode("utf-8")).hexdigest()[:12]
 
+@st.cache_data(ttl=30, show_spinner=False)
 def check_system_diagnostics():
     """Verifies all external dependencies and binaries."""
     diag = {}
@@ -1518,12 +1516,12 @@ def render_manual_clipper():
                             stage_name=f"Stage 4/5: Parallel Processing ({len(candidates)} Shorts)",
                             pct=75,
                             elapsed_str=format_elapsed(time.time() - t_start),
-                            current_subtask=f"Spawning parallel download & render workers (max 5)",
+                            current_subtask=f"Spawning parallel download & render workers (max 2 for 8GB/QSV balance)",
                             throughput="ThreadPoolExecutor",
-                            mem_stat="Parallel Pool"
+                            mem_stat="Balanced Pool"
                         )
 
-                        pool_size = min(5, max(1, len(candidates)))
+                        pool_size = min(2, max(1, len(candidates)))
                         completed_shorts = 0
                         with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as pool:
                             future_map = {pool.submit(process_mode_a_candidate, c_idx, cand): c_idx for c_idx, cand in enumerate(candidates)}
@@ -3291,10 +3289,10 @@ def render_campaign_clipper():
 
             from trend_producer import create_solid_color_broll
             if not raw_vid.exists() or raw_vid.stat().st_size < 100000:
-                raw_vid = create_solid_color_broll(work_dir / "broll.mp4", duration=45.0, is_vertical=True)
+                raw_vid = create_solid_color_broll(work_dir / "broll.mp4", duration=20.0, is_vertical=True)
 
             p_bar.progress(0.50)
-            p_box.info("🎬 Rendering 6 campaign-branded vertical Shorts with karaoke captions & 3.2s zoom...")
+            p_box.info("🎬 Rendering 6 campaign-branded vertical Shorts with karaoke captions & single-pass zoom...")
 
             from editor import generate_piper_tts, generate_karaoke_ass, render_mode_a_short
             from trend_producer import extract_whisper_word_timestamps, get_audio_duration
@@ -3319,25 +3317,10 @@ def render_campaign_clipper():
                 generate_karaoke_ass(words, ass_p, style_preset="neon")
 
                 final_mp4 = ready_dir / f"Short_Camp_{camp_id}_{idx+1}_{ts}.mp4"
-
-                broll_offset = (idx * 9) % 40
-                cut_vis = work_dir / f"vis_{idx}.mp4"
-                subprocess.run([
-                    "ffmpeg", "-y",
-                    "-ss", f"{broll_offset:.1f}",
-                    "-stream_loop", "-1",
-                    "-i", str(raw_vid),
-                    "-i", str(wav_p),
-                    "-t", f"{dur:.2f}",
-                    "-map", "0:v:0",
-                    "-map", "1:a:0",
-                    "-c:v", "copy",
-                    "-c:a", "aac",
-                    str(cut_vis)
-                ], capture_output=True)
+                broll_offset = (idx * 7) % 15
 
                 render_mode_a_short(
-                    source_video=cut_vis,
+                    source_video=raw_vid,
                     ass_subtitles=ass_p,
                     output_short_path=final_mp4,
                     flagged_profanities=[],
@@ -3347,7 +3330,11 @@ def render_campaign_clipper():
                     enable_pacing_zoom=True,
                     enable_anti_content_id=True,
                     enable_music_ducking=False,
-                    enable_sfx=True
+                    enable_sfx=True,
+                    audio_override=wav_p,
+                    input_offset=broll_offset,
+                    input_duration=dur,
+                    loop_input=True
                 )
 
                 if final_mp4.exists():
