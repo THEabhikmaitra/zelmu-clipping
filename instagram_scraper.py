@@ -461,7 +461,7 @@ def scan_and_calculate_account_reels(
     # Method 3: yt-dlp metadata extractor fallback
     temp_cookie_p = None
     if sess_id and not cookies_path:
-        temp_cookie_p = WORKSPACE_DIR / "temp_insta_cookies.txt"
+        temp_cookie_p = WORKSPACE_DIR / f"temp_insta_cookies_{threading.get_ident()}.txt"
         build_netscape_cookies_file(sess_id, temp_cookie_p)
         cookies_path = str(temp_cookie_p)
 
@@ -508,6 +508,9 @@ def scan_and_calculate_account_reels(
                     break
     except Exception as e:
         print(f"[InstaScraper] yt-dlp fallback error: {e}")
+    finally:
+        if temp_cookie_p and temp_cookie_p.exists():
+            temp_cookie_p.unlink(missing_ok=True)
 
     return {
         "account": clean_uname,
@@ -637,9 +640,10 @@ def download_instagram_video(
     if download_reel_direct_cdn(url, output_mp4, session_id=sess_id):
         return output_mp4
 
-    # 2. Auto-build Netscape cookies for yt-dlp if not provided
+    # 2. Auto-build ephemeral Netscape cookies for yt-dlp if not provided
+    temp_cookie_p = None
     if not cookies_path and sess_id:
-        temp_cookie_p = WORKSPACE_DIR / "temp_insta_cookies.txt"
+        temp_cookie_p = WORKSPACE_DIR / f"temp_insta_cookies_{threading.get_ident()}.txt"
         build_netscape_cookies_file(sess_id, temp_cookie_p)
         cookies_path = str(temp_cookie_p)
 
@@ -669,6 +673,9 @@ def download_instagram_video(
     except Exception:
         if part_mp4.exists():
             part_mp4.unlink()
+    finally:
+        if temp_cookie_p and temp_cookie_p.exists():
+            temp_cookie_p.unlink(missing_ok=True)
     return None
 
 
@@ -869,7 +876,7 @@ def _crawler_worker_loop():
         sess_id = get_session_cookie()
         temp_cookies_p = None
         if sess_id:
-            temp_cookies_p = WORKSPACE_DIR / "temp_insta_cookies.txt"
+            temp_cookies_p = WORKSPACE_DIR / f"temp_insta_cookies_{threading.get_ident()}.txt"
             build_netscape_cookies_file(sess_id, temp_cookies_p)
 
         try:
@@ -893,6 +900,9 @@ def _crawler_worker_loop():
             if r_id not in state["failed_ids"]:
                 state["failed_ids"].append(r_id)
             push_insta_log(f"⚠️ Error on reel {r_id}: {err}. Safely continuing...")
+        finally:
+            if temp_cookies_p and temp_cookies_p.exists():
+                temp_cookies_p.unlink(missing_ok=True)
 
         state["current_index"] = len(state["completed_ids"])
         save_crawler_state(state)

@@ -9,14 +9,23 @@ bin/
 *.onnx
 *.onnx.json
 
-# Credentials & OAuth Tokens (CRITICAL FOR PUBLIC REPOS)
-client_secrets.json
+# Credentials, OAuth Tokens & Session Cookies (CRITICAL FOR PUBLIC REPOS)
+client_secret*.json
+client_secrets*.json
+!client_secrets.json.example
 token.json
 token_*.json
+tokens_*.json
 tokens/
+*session*.json
+*cookies*
+oauth_*.json
 *.pem
 *.key
+*.pkl
+*.credentials
 .env
+.env.*
 
 # Processing Workspace & Video Storage
 workspace/
@@ -24,15 +33,18 @@ input_videos/
 ready_to_upload/
 uploaded_archive/
 *.mp4
+*.mkv
+*.webm
 *.wav
 *.mp3
 *.ass
 *.srt
 *.vtt
 
-# Logs
+# Logs & Analytics Data
 upload_history.log
 upload_log.csv
+*.csv
 *.log
 
 # Python Cache & OS metadata
@@ -45,10 +57,14 @@ Thumbs.db
 # Streamlit Local Runtime
 .streamlit/secrets.toml
 
-# Runtime daemon state & progress
+# Runtime daemon state, scraped caches & progress (Privacy)
 *_state.json
 *_progress.json
 *_config.json
+*_cache.json
+*_db.json
+insta_discovered_cache.json
+insta_session.json
 learning_db.json
 upload_history.json
 campaigns_db.json
@@ -56,7 +72,11 @@ contentrewards_cache.json
 exhausted_slots.json
 scratch/
 
-# TikTok Sensitive Auth & Debug Captures
+# Sensitive Auth Captures & Generated Thumbnails
 tiktok_cookies.*
 tiktok_*.png
 *.png
+!logo.png
+*.jpg
+*.jpeg
+*.webp

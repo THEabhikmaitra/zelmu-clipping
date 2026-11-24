@@ -2,6 +2,7 @@ import os
 import sys
 import re
 import gc
+import html as _html
 import time
 import json
 import shutil
@@ -926,13 +927,18 @@ def render_labor_card(
 ):
     """Renders high-trust Labor Illusion UI card with real-time stats and YouTube top laser beam."""
     pct_clamped = min(100, max(0, pct))
+    safe_stage = _html.escape(str(stage_name))
+    safe_elapsed = _html.escape(str(elapsed_str))
+    safe_sub = _html.escape(str(current_subtask))
+    safe_tp = _html.escape(str(throughput))
+    safe_mem = _html.escape(str(mem_stat))
     html = f"""
     <div class="yt-laser-bar"><div class="yt-laser-beam"></div></div>
     <div class="labor-card">
         <div class="labor-top-row">
             <div class="labor-stage-badge">
                 <span class="labor-pulse-dot"></span>
-                <span>{stage_name}</span>
+                <span>{safe_stage}</span>
             </div>
             <div class="labor-pct-num">{pct_clamped}%</div>
         </div>
@@ -944,19 +950,19 @@ def render_labor_card(
         <div class="labor-data-grid">
             <div class="labor-data-cell">
                 <span class="labor-label">ELAPSED</span>
-                <span class="labor-val">{elapsed_str}</span>
+                <span class="labor-val">{safe_elapsed}</span>
             </div>
             <div class="labor-data-cell">
                 <span class="labor-label">SUBTASK</span>
-                <span class="labor-val">{current_subtask}</span>
+                <span class="labor-val">{safe_sub}</span>
             </div>
             <div class="labor-data-cell">
                 <span class="labor-label">THROUGHPUT</span>
-                <span class="labor-val">{throughput}</span>
+                <span class="labor-val">{safe_tp}</span>
             </div>
             <div class="labor-data-cell">
                 <span class="labor-label">STATUS</span>
-                <span class="labor-val">{mem_stat}</span>
+                <span class="labor-val">{safe_mem}</span>
             </div>
         </div>
     </div>
@@ -2930,16 +2936,20 @@ def render_instagram_clipper():
     with top_c2:
         st.markdown("<div class='section-title'>SESSION & ANTI-BOT SHIELD</div>", unsafe_allow_html=True)
         saved_sess = get_session_cookie()
+        sess_hint = f"Stored locally (••••{saved_sess[-4:]})" if len(saved_sess) > 4 else ("Stored locally" if saved_sess else "Paste sessionid cookie to bypass rate-limits")
         sess_input = st.text_input(
             "Instagram Session ID (sessionid cookie)",
-            value=saved_sess,
+            value="",
             type="password",
-            placeholder="Paste sessionid cookie to bypass rate-limits",
+            placeholder=sess_hint,
             key="insta_session_input"
         )
         if st.button("💾 Save SessionID", key="btn_save_sess", use_container_width=True):
-            save_session_cookie(sess_input)
-            st.success("✓ SessionID saved locally! Rate-limits unlocked.")
+            if sess_input.strip():
+                save_session_cookie(sess_input)
+                st.success("✓ SessionID saved locally! Rate-limits unlocked.")
+            else:
+                st.warning("Paste a new sessionid first.")
 
         st.caption("🛡️ **Auto-Protection:** Broadcast cricket/sports reels are filtered out automatically. Background songs permanently banned.")
 

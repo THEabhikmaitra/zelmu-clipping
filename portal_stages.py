@@ -4,6 +4,7 @@ Implements Stages 3, 5, and 6 of the Zelmu Autonomous Clipping Flywheel with ful
 end-to-end data interconnection across all stages.
 """
 
+import html as _html
 import json
 import time
 import shutil
@@ -208,13 +209,15 @@ def _render_telemetry_metrics_grid(snap: Dict[str, Any]):
         )
 
     with m2:
+        safe_cr_acct = _html.escape(str(snap['crawler_account']))
+        safe_cr_cap = _html.escape(str(snap['crawler_caption'][:28] or 'None active'))
         st.markdown(
             f"""
             <div style="border:1px solid #27272a; border-radius:6px; padding:10px; background:#18181b;">
                 <div style="color:#a1a1aa; font-size:0.70rem; font-weight:600; text-transform:uppercase;">📸 Instagram Crawler Daemon</div>
                 <div style="font-size:1.15rem; font-weight:700; color:{cr_color}; margin:4px 0;">{cr_stat} ({snap['crawler_done']}/{snap['crawler_q']})</div>
-                <div style="font-size:0.75rem; color:#a1a1aa;">Target: <b>@{snap['crawler_account']}</b> | Fail: {snap['crawler_fail']}</div>
-                <div style="font-size:0.72rem; color:#71717a; margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Reel: {snap['crawler_caption'][:28] or 'None active'}</div>
+                <div style="font-size:0.75rem; color:#a1a1aa;">Target: <b>@{safe_cr_acct}</b> | Fail: {snap['crawler_fail']}</div>
+                <div style="font-size:0.72rem; color:#71717a; margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Reel: {safe_cr_cap}</div>
             </div>
             """,
             unsafe_allow_html=True

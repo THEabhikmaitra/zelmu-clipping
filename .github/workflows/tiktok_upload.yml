@@ -12,6 +12,9 @@ on:
         required: false
         default: 'Viral Moment #fyp #trending #viral'
 
+permissions:
+  contents: read
+
 jobs:
   upload-tiktok:
     runs-on: ubuntu-latest  # Runs natively on US/Azure datacenter IP (bypasses Indian ISP/carrier locks)
@@ -38,33 +41,49 @@ jobs:
             echo "ERROR: TIKTOK_COOKIES secret is not set in GitHub repository secrets!"
             exit 1
           fi
-          echo "$TIKTOK_COOKIES_SECRET" > tiktok_cookies.txt
+          umask 077
+          printf '%s\n' "$TIKTOK_COOKIES_SECRET" > tiktok_cookies.txt
 
       - name: Execute Humanless Upload
+        env:
+          CLIP_NAME: ${{ github.event.inputs.clip_name }}
+          CLIP_DESC: ${{ github.event.inputs.description }}
         run: |
-          python -c "
-          from tiktok_uploader.upload import upload_video
+          python - << 'PYEOF'
+          import os, sys
           from pathlib import Path
-          
-          clip = '${{ github.event.inputs.clip_name }}'
-          desc = '${{ github.event.inputs.description }}'
-          
-          ready_clips = sorted(list(Path('ready_to_upload').glob('*.mp4')))
-          target = Path('ready_to_upload') / clip if clip else (ready_clips[0] if ready_clips else None)
-          
+          from tiktok_uploader.upload import upload_video
+
+          clip = os.environ.get("CLIP_NAME", "").strip()
+          desc = os.environ.get("CLIP_DESC", "Viral Moment #fyp #trending #viral")
+          ready_dir = Path("ready_to_upload").resolve()
+
+          if clip:
+              target = (ready_dir / clip).resolve()
+              if not target.is_relative_to(ready_dir):
+                  print("ERROR: Invalid clip_name outside ready_to_upload/")
+                  sys.exit(1)
+          else:
+              ready_clips = sorted(list(ready_dir.glob("*.mp4")))
+              target = ready_clips[0] if ready_clips else None
+
           if not target or not target.exists():
-              print('No video found to upload!')
-              exit(1)
-              
-          print(f'Uploading {target.name} to TikTok via US runner...')
+              print("No video found to upload!")
+              sys.exit(1)
+
+          print(f"Uploading {target.name} to TikTok via US runner...")
           failed = upload_video(
               filename=str(target),
               description=desc,
-              cookies='tiktok_cookies.txt',
+              cookies="tiktok_cookies.txt",
               headless=True
           )
           if failed:
-              print(f'Upload failed: {failed}')
-              exit(1)
-          print('Successfully uploaded to TikTok!')
-          "
+              print(f"Upload failed: {failed}")
+              sys.exit(1)
+          print("Successfully uploaded to TikTok!")
+          PYEOF
+
+      - name: Scrub Ephemeral Cookies
+        if: always()
+        run: rm -f tiktok_cookies.txt
