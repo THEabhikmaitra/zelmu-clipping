@@ -507,18 +507,49 @@ def process_livestream_slice(
             # Generate sidecar metadata JSON for YouTube Studio (Live-specific)
             sidecar_p = final_dest.with_suffix(".json")
             try:
-                clean_tag_author = re.sub(r'[^a-zA-Z0-9]', '', author)
+                clean_author = author.strip() or "Live Creator"
+                clean_tag_author = re.sub(r'[^a-zA-Z0-9]', '', clean_author)
+                
+                # Ensure creator name is explicitly in Title for fanbase search discovery
+                if clean_author.lower() not in clip_title.lower() and clean_author.lower() != "live creator":
+                    final_short_title = f"{clean_author}: {clip_title}"
+                else:
+                    final_short_title = clip_title
+                if len(final_short_title) > 65:
+                    final_short_title = final_short_title[:62].rstrip() + "..."
+                final_short_title = f"{final_short_title} #Shorts"
+
+                creator_search_terms = f"{clean_author} live, {clean_author} clips, {clean_author} stream highlights, {clean_author} funny moments"
+                desc = (
+                    f"🔴 {final_short_title}\n\n"
+                    f"Best live streaming highlights and funny moments from {clean_author}!\n"
+                    f"Original Stream: {title}\n\n"
+                    f"🔥 Trending Search: {creator_search_terms}\n"
+                    f"Subscribe to @zelmuesports for daily {clean_author} clips and top gaming moments!\n\n"
+                    f"#Shorts #{clean_tag_author} #{clean_tag_author}Live #{clean_tag_author}Clips #{clean_tag_author}Moments #LiveStream #Highlights #Gaming #Viral"
+                )
+
+                creator_tags = [
+                    clean_author,
+                    f"{clean_author} live",
+                    f"{clean_author} clips",
+                    f"{clean_author} stream",
+                    f"{clean_author} highlights",
+                    f"{clean_author} funny",
+                    f"{clean_author} moments",
+                    f"{clean_author} reactions"
+                ] if clean_author.lower() != "live creator" else []
+
+                full_tags = creator_tags + ["Shorts", "LiveStream", "Highlights", "Gaming", "Viral"]
+
                 with open(sidecar_p, "w", encoding="utf-8") as sf:
                     json.dump({
-                        "title": f"{clip_title} #Shorts",
-                        "description": (
-                            f"🔴 {clip_title}\n\n"
-                            f"Best live streaming highlights from {author}!\n"
-                            f"Stream: {title}\n\n"
-                            f"Subscribe to @zelmuesports for non-stop live gaming moments & clips!\n\n"
-                            f"#Shorts #{clean_tag_author} #LiveStream #Highlights #Gaming"
-                        ),
-                        "tags": ["Shorts", author, "LiveStream", "Highlights", "Gaming", "Viral"],
+                        "title": final_short_title,
+                        "description": desc,
+                        "tags": full_tags,
+                        "creator": clean_author,
+                        "channel_name": clean_author,
+                        "source_title": title,
                         "category_id": "20",  # Gaming
                         "privacy_status": "private",
                         "approved": False,

@@ -545,45 +545,81 @@ def is_ollama_online() -> bool:
 def convert_caption_to_youtube_seo(caption: str, uploader: str = "") -> Dict[str, Any]:
     """
     Converts raw Instagram caption to YouTube SEO Title, Description, and Tags
-    via Ollama with smart regex fallback.
+    via Ollama with smart regex fallback. Explicitly prioritizes popular creator's
+    name across Title, Description, and Tags to capture fanbase search volume.
     """
     clean_text = re.sub(r'#\w+', '', caption).strip()
     clean_lines = [l.strip() for l in clean_text.splitlines() if l.strip() and not l.startswith('.')]
     lead_sentence = clean_lines[0] if clean_lines else "Unbelievable Viral Moment"
-    account_handle = f"@{uploader.lstrip('@')}" if uploader else "@creator"
+    clean_uploader = re.sub(r'[^a-zA-Z0-9_]', '', uploader.lstrip('@')).strip()
+    is_valid_uploader = bool(clean_uploader and clean_uploader.lower() not in ["creator", "unknown", "none", "instagram", "reels", ""])
+    account_handle = f"@{clean_uploader}" if is_valid_uploader else "@creator"
+    creator_name = clean_uploader if is_valid_uploader else ""
 
     if is_ollama_online():
         prompt = f"""You are a YouTube Shorts SEO specialist. Convert this Instagram Reel caption into a high-CTR YouTube Short title and description:
 Caption: "{lead_sentence[:120]}"
 Original Creator: {account_handle}
 
+MANDATORY RULES:
+1. Creator '{creator_name}' has an active fanbase and search demand. You MUST include '{creator_name}' in the title (e.g. '{creator_name}: ...' or '{creator_name} ... #Shorts').
+2. Title must be under 65 chars.
+3. Include creator credit and creator search tags (e.g. '{creator_name}', '{creator_name} reels', '{creator_name} clips').
+
 Return ONLY JSON:
 {{
-  "title": "High-CTR Title under 65 chars #Shorts",
-  "description": "Engaging description with credit to {account_handle}",
-  "tags": ["Tag1", "Tag2", "Tag3", "Shorts"]
+  "title": "{creator_name}: High-CTR Title #Shorts",
+  "description": "Engaging description with credit to {account_handle} and search keywords.",
+  "tags": ["{creator_name}", "{creator_name} reels", "Tag1", "Tag2", "Shorts"]
 }}"""
         try:
             res = query_ollama_json(prompt, retries=1, timeout=12)
             if res and isinstance(res, dict) and "title" in res:
                 t_raw = res.get("title", "")
+                if is_valid_uploader and creator_name.lower() not in t_raw.lower():
+                    t_raw = f"{creator_name}: {t_raw}"
                 t_clean = t_raw if "#shorts" in t_raw.lower() else f"{t_raw} #Shorts"
+                res_tags = [t for t in res.get("tags", []) if isinstance(t, str)]
+                if is_valid_uploader and creator_name not in res_tags:
+                    res_tags.insert(0, creator_name)
+                    res_tags.insert(1, f"{creator_name} reels")
+                clean_tag_u = re.sub(r'[^a-zA-Z0-9]', '', creator_name)
+                desc = (
+                    f"{res.get('description', '')}\n\n"
+                    f"Original Creator Credit: {account_handle}\n"
+                    f"Watch more viral reels & moments from {creator_name}!\n\n"
+                    f"Subscribe to @zelmuesports for daily creator highlights.\n\n"
+                    f"#Shorts #{clean_tag_u} #{clean_tag_u}Reels #Trending #Viral"
+                )
                 return {
                     "title": t_clean[:70],
-                    "description": f"{res.get('description', '')}\n\nCredit: {account_handle}\n\n#Shorts #Trending",
-                    "tags": [t for t in res.get("tags", []) if isinstance(t, str)][:10] or ["Shorts", "Viral", "Trending"]
+                    "description": desc,
+                    "tags": res_tags[:12] or ["Shorts", "Viral", "Trending"]
                 }
         except Exception:
             pass
 
     base_title = lead_sentence[:50].strip()
-    title = f"{base_title.title()} 🤯 #Shorts" if len(base_title) <= 50 else f"{base_title[:45].title()}... #Shorts"
-    extracted_hashtags = [w.strip("#") for w in re.findall(r'#\w+', caption)[:8]]
+    if is_valid_uploader:
+        title = f"{creator_name}: {base_title.title()} 🤯 #Shorts" if len(base_title) <= 45 else f"{creator_name}: {base_title[:40].title()}... #Shorts"
+    else:
+        title = f"{base_title.title()} 🤯 #Shorts" if len(base_title) <= 50 else f"{base_title[:45].title()}... #Shorts"
+    extracted_hashtags = [w.strip("#") for w in re.findall(r'#\w+', caption)[:6]]
+
+    clean_tag_u = re.sub(r'[^a-zA-Z0-9]', '', creator_name)
+    creator_tags = [creator_name, f"{creator_name} reels", f"{creator_name} clips", f"{creator_name} viral"] if is_valid_uploader else []
+    desc = (
+        f"🔥 {lead_sentence}\n\n"
+        f"Original Creator Credit: {account_handle}\n"
+        f"Viral moments & trending reels from {creator_name}!\n\n"
+        f"Subscribe to @zelmuesports for daily creator highlights.\n\n"
+        f"#Shorts " + (f"#{clean_tag_u} #{clean_tag_u}Reels " if is_valid_uploader else "") + "#Trending #Viral"
+    )
 
     return {
         "title": title[:70],
-        "description": f"🔥 {lead_sentence}\n\nCredit: {account_handle}\n\n#Shorts #Trending",
-        "tags": extracted_hashtags + ["Shorts", "Trending", "Viral"]
+        "description": desc,
+        "tags": creator_tags + extracted_hashtags + ["Shorts", "Trending", "Viral"]
     }
 
 

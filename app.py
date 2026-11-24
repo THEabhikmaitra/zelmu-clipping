@@ -1457,10 +1457,51 @@ def render_manual_clipper():
                                 enable_sfx=enable_sfx
                             )
                             push_log(f"✓ Rendered: {final_dest.name}")
+                            
+                            # Popular creator metadata optimization for title, description, tags
+                            clean_creator = active_credit.lstrip("@").strip()
+                            is_creator_valid = bool(clean_creator and clean_creator.lower() not in ["creator", "streamer", "unknown", "live", "none", ""])
+                            cand_title = cand.get("title", final_dest.stem.replace("_", " "))
+                            if is_creator_valid and clean_creator.lower() not in cand_title.lower():
+                                clip_title = f"{clean_creator}: {cand_title}"
+                            else:
+                                clip_title = cand_title
+                            if len(clip_title) > 65:
+                                clip_title = clip_title[:62].rstrip() + "..."
+                            final_mode_a_title = f"{clip_title} #Shorts" if "#shorts" not in clip_title.lower() else clip_title
+
+                            clean_tag_creator = re.sub(r'[^a-zA-Z0-9]', '', clean_creator)
+                            creator_tags = [
+                                clean_creator,
+                                f"{clean_creator} clips",
+                                f"{clean_creator} highlights",
+                                f"{clean_creator} moments",
+                                f"{clean_creator} funny",
+                                f"{clean_creator} live"
+                            ] if is_creator_valid else []
+                            full_tags = creator_tags + ["Shorts", "Trending", "Gaming", "Viral"]
+
+                            desc_lines = [
+                                f"🔥 {clip_title}",
+                                "",
+                                f"Original Creator: {active_credit}" if is_creator_valid else "",
+                                f"Source Video: {meta.get('title', '')}" if meta.get('title') else "",
+                                "",
+                                f"Best moments and top clips from {clean_creator}!" if is_creator_valid else "",
+                                "Subscribe to @zelmuesports for daily gaming highlights & viral moments!",
+                                "",
+                                f"#Shorts " + (f"#{clean_tag_creator} #{clean_tag_creator}Clips #{clean_tag_creator}Moments " if is_creator_valid else "") + "#Gaming #Viral #Trending"
+                            ]
+                            clean_desc = "\n".join([l for l in desc_lines if l is not None])
+
                             save_sidecar_data(final_dest, {
-                                "title": cand.get("title", final_dest.stem.replace("_", " ")),
-                                "description": f"🔥 {cand.get('title', '')}\n\n#Shorts #Gaming",
-                                "tags": ["Shorts", "Trending", "Gaming"],
+                                "title": final_mode_a_title,
+                                "description": clean_desc,
+                                "tags": full_tags,
+                                "creator": clean_creator if is_creator_valid else "",
+                                "channel_name": active_credit if is_creator_valid else "",
+                                "source_title": meta.get("title", ""),
+                                "category_id": "20",
                                 "stage": "pending_quality_review",
                                 "approved": False,
                                 "source": "manual_clipper",
@@ -1567,10 +1608,50 @@ def render_manual_clipper():
                                 logo_path=active_logo_path
                             )
                             push_log(f"Rendered: {final_dest.name}")
+
+                            # Popular creator metadata optimization for compilation Mode B
+                            clean_creator_b = active_credit.lstrip("@").strip()
+                            is_creator_b_valid = bool(clean_creator_b and clean_creator_b.lower() not in ["creator", "streamer", "unknown", "live", "none", ""])
+                            comp_theme = analysis.get("theme", final_dest.stem.replace("_", " "))
+                            if is_creator_b_valid and clean_creator_b.lower() not in comp_theme.lower():
+                                comp_title = f"{clean_creator_b}: {comp_theme}"
+                            else:
+                                comp_title = comp_theme
+                            if len(comp_title) > 65:
+                                comp_title = comp_title[:62].rstrip() + "..."
+                            final_mode_b_title = f"{comp_title} #Shorts" if "#shorts" not in comp_title.lower() else comp_title
+
+                            clean_tag_creator_b = re.sub(r'[^a-zA-Z0-9]', '', clean_creator_b)
+                            creator_b_tags = [
+                                clean_creator_b,
+                                f"{clean_creator_b} compilation",
+                                f"{clean_creator_b} clips",
+                                f"{clean_creator_b} moments",
+                                f"{clean_creator_b} best of"
+                            ] if is_creator_b_valid else []
+                            full_b_tags = creator_b_tags + ["GTA6", "Shorts", "Trending", "Gaming", "Viral"]
+
+                            desc_b_lines = [
+                                f"🔥 {comp_title}",
+                                "",
+                                f"Featuring gameplay & highlights from: {active_credit}" if is_creator_b_valid else "",
+                                f"Source Video: {meta.get('title', '')}" if meta.get('title') else "",
+                                "",
+                                f"Transformative compilation with analytical commentary on {clean_creator_b} moments." if is_creator_b_valid else "Transformative commentary compilation.",
+                                "Subscribe to @zelmuesports for daily gaming compilations & viral highlights!",
+                                "",
+                                f"#Shorts " + (f"#{clean_tag_creator_b} #{clean_tag_creator_b}Clips " if is_creator_b_valid else "") + "#Gaming #GTA6 #Trending #Viral"
+                            ]
+                            clean_b_desc = "\n".join([l for l in desc_b_lines if l is not None])
+
                             save_sidecar_data(final_dest, {
-                                "title": analysis.get("theme", final_dest.stem.replace("_", " ")),
-                                "description": f"🔥 {analysis.get('theme', '')}\n\nTransformative commentary.\n\n#Shorts #GTA6",
-                                "tags": ["GTA6", "Shorts", "Trending"],
+                                "title": final_mode_b_title,
+                                "description": clean_b_desc,
+                                "tags": full_b_tags,
+                                "creator": clean_creator_b if is_creator_b_valid else "",
+                                "channel_name": active_credit if is_creator_b_valid else "",
+                                "source_title": meta.get("title", ""),
+                                "category_id": "20",
                                 "stage": "pending_quality_review",
                                 "approved": False,
                                 "source": "manual_clipper_mode_b",

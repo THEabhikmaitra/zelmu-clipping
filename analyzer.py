@@ -315,7 +315,8 @@ def extract_top_speech_windows(
     segments: Union[Dict[str, Any], List[Dict[str, Any]]],
     target_clips: int = 5,
     min_duration: float = 25.0,
-    max_duration: float = 45.0
+    max_duration: float = 45.0,
+    channel_name: str = ""
 ) -> List[Dict[str, Any]]:
     """Instant 0.005s non-overlapping speech density highlight selector across video."""
     if isinstance(segments, dict):
@@ -363,10 +364,13 @@ def extract_top_speech_windows(
         "Insane Gunfight Survival", "Speedrun Moment", "Hilarious Fail Reaction",
         "Max Wanted Level Madness"
     ]
+    clean_author = re.sub(r'[^a-zA-Z0-9 ]', '', channel_name).strip()
+    is_creator_valid = bool(clean_author and clean_author.lower() not in ["creator", "streamer", "live", "unknown", "none", ""])
+
     candidates = []
     for idx, w in enumerate(selected[:target_clips]):
         theme = VIRAL_THEMES[idx % len(VIRAL_THEMES)]
-        title = f"{theme} @ {int(w['start'])}s"
+        title = f"{clean_author}: {theme}" if is_creator_valid else f"{theme} @ {int(w['start'])}s"
         candidates.append({
             "start": w["start"],
             "end": w["end"],
@@ -374,7 +378,7 @@ def extract_top_speech_windows(
             "spoken_word_count": w.get("words", 30),
             "viral_hook": f"Peak Engagement #{idx+1}",
             "title": title,
-            "safe_title": sanitize_filename(f"Highlight_{theme.replace(' ', '_')}_{idx+1}_{int(w['start'])}s"),
+            "safe_title": sanitize_filename(f"Highlight_{clean_author.replace(' ', '_') if is_creator_valid else 'Clip'}_{theme.replace(' ', '_')}_{idx+1}_{int(w['start'])}s"),
             "reason": f"Spoken density score: {w['score']} ({w.get('words', 30)} words)"
         })
     return candidates
@@ -680,7 +684,9 @@ def extract_candidates_full(
             dur = round(end_exact - start_exact, 2)
             if 24.0 <= dur <= 44.0:
                 theme_title = VIRAL_THEMES[idx % len(VIRAL_THEMES)]
-                title = f"{theme_title} @ {int(start_exact)}s"
+                clean_author = re.sub(r'[^a-zA-Z0-9 ]', '', channel_name).strip()
+                is_creator_valid = bool(clean_author and clean_author.lower() not in ["creator", "streamer", "live", "unknown", "none", ""])
+                title = f"{clean_author}: {theme_title}" if is_creator_valid else f"{theme_title} @ {int(start_exact)}s"
                 all_candidates.append({
                     "start": round(start_exact, 2),
                     "end": round(end_exact, 2),
@@ -688,13 +694,13 @@ def extract_candidates_full(
                     "spoken_word_count": words_count,
                     "viral_hook": f"Acoustic Peak #{idx+1} (Score {int(spk['score']*100)}%)",
                     "title": title,
-                    "safe_title": sanitize_filename(f"GTA6_{theme_title.replace(' ', '_')}_{idx+1}_{int(start_exact)}s"),
+                    "safe_title": sanitize_filename(f"GTA6_{clean_author.replace(' ', '_') if is_creator_valid else 'Moment'}_{theme_title.replace(' ', '_')}_{idx+1}_{int(start_exact)}s"),
                     "reason": f"Acoustic spike: loudness={spk['loud']}, shout={spk['shout']}"
                 })
 
     # Fast Path 2: Instant Speech Density Clustering (0.005s, avoids 70s+ Ollama stall)
     if len(all_candidates) < target_clips and segments:
-        density_cands = extract_top_speech_windows(segments, target_clips=target_clips)
+        density_cands = extract_top_speech_windows(segments, target_clips=target_clips, channel_name=channel_name)
         for dc in density_cands:
             if not any(abs(dc["start"] - ac["start"]) < 25.0 for ac in all_candidates):
                 all_candidates.append(dc)
