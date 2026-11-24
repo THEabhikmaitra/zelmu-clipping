@@ -999,12 +999,20 @@ def upload_single_video(
     ]
     thumb_to_upload = next((p for p in thumb_candidates if p.exists() and p != file_path), None)
     if thumb_to_upload and video_id and youtube:
+        thumb_media = None
         try:
             thumb_media = MediaFileUpload(str(thumb_to_upload), mimetype="image/jpeg", resumable=False)
             youtube.thumbnails().set(videoId=video_id, media_body=thumb_media).execute()
             print(f"[Thumbnail] Auto-applied custom thumbnail to {video_id} ({thumb_to_upload.name})")
         except Exception as e:
             print(f"[Thumbnail] Notice: Could not apply API thumbnail ({e}). Frame-1 visual hook active in video.")
+        finally:
+            if thumb_media and hasattr(thumb_media, "_fd") and thumb_media._fd:
+                try:
+                    thumb_media._fd.close()
+                except Exception:
+                    pass
+            del thumb_media
 
     # Explicitly release file handles to prevent WinError 32 on Windows
     if hasattr(media, "_fd") and media._fd:
@@ -1018,17 +1026,29 @@ def upload_single_video(
     gc.collect()
 
     # Permanently delete video file, sidecar, and thumbnails from disk upon confirmed upload/schedule success
+    # Independent unlinks with Windows retry so failure on one never blocks another
+    sidecar_json = file_path.with_suffix(".json")
     try:
-        sidecar_json = file_path.with_suffix(".json")
         if sidecar_json.exists():
-            sidecar_json.unlink()
-        for tc in thumb_candidates:
-            if tc.exists() and tc != file_path:
-                tc.unlink()
-        if file_path.exists():
-            file_path.unlink()
+            sidecar_json.unlink(missing_ok=True)
     except Exception:
         pass
+
+    for tc in thumb_candidates:
+        try:
+            if tc.exists() and tc.resolve() != file_path.resolve():
+                tc.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    for _ in range(3):
+        try:
+            if file_path.exists():
+                file_path.unlink(missing_ok=True)
+            break
+        except Exception:
+            time.sleep(0.3)
+            gc.collect()
 
     # Log into upload history for closed-loop learning & clean old workspaces
     try:
@@ -1041,7 +1061,7 @@ def upload_single_video(
             privacy_mode=privacy_status,
             tags=tags
         )
-        cleanup_stale_workspaces(max_age_days=7)
+        cleanup_stale_workspaces(max_age_days=1)
     except Exception:
         pass
 

@@ -46,11 +46,25 @@ def save_sidecar_data(video_path: Path, data: Dict[str, Any]):
 
 def get_pipeline_telemetry(ready_dir: Path) -> Dict[str, Any]:
     """Computes real-time data state across all 6 stages of the flywheel."""
+    history = load_upload_history()
+    uploaded_stems = {h.get("file_stem", "") for h in history if h.get("file_stem")}
+
     ready_files = list(ready_dir.glob("*.mp4")) if ready_dir.exists() else []
     pending_files = []
     approved_files = []
 
     for vf in ready_files:
+        # If video was already uploaded to YouTube Studio, auto-purge residual files from disk
+        if vf.stem in uploaded_stems:
+            try:
+                vf.unlink(missing_ok=True)
+                vf.with_suffix(".json").unlink(missing_ok=True)
+                for tc in [vf.with_suffix(".thumb.jpg"), vf.with_suffix(".jpg"), vf.with_suffix(".png")]:
+                    tc.unlink(missing_ok=True)
+            except Exception:
+                pass
+            continue
+
         meta = get_sidecar_data(vf)
         if meta.get("approved") is True:
             approved_files.append(vf)
@@ -58,7 +72,6 @@ def get_pipeline_telemetry(ready_dir: Path) -> Dict[str, Any]:
             pending_files.append(vf)
 
     arbiter_info = get_arbiter_status()
-    history = load_upload_history()
     db = load_learning_db()
 
     total_views = sum(int(h.get("last_synced_views", 0)) for h in history)

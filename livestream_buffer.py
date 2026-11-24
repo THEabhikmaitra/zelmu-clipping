@@ -562,6 +562,7 @@ def process_livestream_slice(
 
             return final_dest
 
+        rendered_files: List[Path] = []
         pool_workers = min(3, max(1, len(candidates)))
         with concurrent.futures.ThreadPoolExecutor(max_workers=pool_workers) as pool:
             future_map = {pool.submit(process_live_short, c_idx, win): c_idx for c_idx, win in enumerate(candidates)}
